@@ -1,0 +1,78 @@
+{
+  "summary": "Iteration 2 testing of Trailscribe. VERIFIED FIXED: the P0 Delhi bug — after picking a Bengaluru discovery card, clicking city-delhi now clears customStart, the payload sent is start_lat=28.6139/start_lon=77.209, route.start returns [77.209, 28.6139], all returned coordinates are inside Delhi bounds (lat 28-29, lon 76-78), the map flies to Delhi, and switching city wipes all previous route panels. VERIFIED WORKING: new TurnByTurn panel (61-68 step rows, header step count, collapsible, distances formatted as '97m'/'1.20km') and new WeatherStrip (TEMP/AIR+AQI bucket/SUNRISE/RAIN/UV chips) plus weather stage in failure log, save flow (200 + toast), gemini and claude providers. Backend suite extended to 24 pytest tests (weather field, steps.distance_m, weather failure-log stage, Delhi bounds, save-with-weather). 3 real backend defects found: (1) intermittent silent LLM narration JSON-parse fallback wrongly logged as 'success' (RCA below, reproduced ~40-50% of claude runs), (2) POST /api/routes/save silently drops the new weather field, (3) Open-Meteo partial/failed fetch returns all-null fields but is still logged level='success'.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/routes/generate",
+        "issue": "Intermittent (reproduced in 3 of 7 claude runs, also under load) narration collapses to the placeholder 'Route narration unavailable — see turn-by-turn instructions.' while failure_log still records level='success', stage='llm_narration'. Root cause is services/llm_service.py::_extract_json: it slices first '{' to last '}' and calls json.loads with strict=True. Captured real errors: 'JSONDecodeError: Extra data: line 5 column 1' (model emitted a second JSON block/prose after the object) and 'JSONDecodeError: Invalid control character at line 3 column 650' (literal newlines inside JSON string values). Fix: use json.JSONDecoder().raw_decode() from the first '{' (so trailing content is ignored), pass strict=False, prefer the fenced ```json block, add one retry, log the exception, and emit failure_log level='warn' when the fallback is used. Same helper is used by llm_guess_route, so the 'instructive failure' guess silently degrades too.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/routes/save",
+        "issue": "SaveRouteRequest has no `weather` field, so the weather snapshot is dropped by Pydantic and never persisted (test_save_persists_weather fails deterministically: 'weather' absent from GET /api/routes/saved doc). Home.jsx saveRoute() also does not send route.weather. Add `weather: Optional[Dict[str, Any]] = None` to SaveRouteRequest + SavedRoute and include it in the frontend save payload."
+      },
+      {
+        "endpoint": "POST /api/routes/generate (weather stage)",
+        "issue": "When the Open-Meteo forecast call fails/rate-limits, fetch_weather_snapshot returns a dict with temperature_c/sunrise/aqi all None but server.py still appends failure_log level='success' ('Weather fetched: None°C, AQI None (unknown), sunrise None'). Reproduced ~20-25% of runs during repeated testing. Should log level='warn' when key fields are None, and ideally add one retry / short-lived cache per (lat,lon,hour)."
+      },
+      {
+        "endpoint": "POST /api/routes/generate (ORS distance)",
+        "issue": "Requested distance is frequently overshot far beyond the 20% warn threshold (5 km asked -> 8.4 km delivered for Delhi; 5 -> 6.19 km for Bengaluru). Only surfaced as a warn entry; consider retrying with an adjusted round-trip length so the delivered distance is closer to the request."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Narration panel (map top-right)",
+        "issues": [
+          "Content is clipped: measured scrollHeight=1142 vs clientHeight=754 with class `no-scrollbar` on an overflow-y-auto container, so the narration is cut mid-sentence and the segments / safety_note / water_stop_pitch cards below the fold are invisible with zero scroll affordance. Add a bottom fade mask, a visible thin scrollbar, or a 'more' indicator."
+        ]
+      },
+      {
+        "screen": "Elevation profile (bottom strip)",
+        "issues": [
+          "X-axis tick labels are crammed and collide ('0.07km 0.18km 0.61km 0.97km 1.22km ...') — reduce tick count / use interval so labels stay legible."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/debug_narrate.py",
+    "/app/backend/tests/debug_generate_repeat.py",
+    "/app/backend/tests/debug_concurrent.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Harden services/llm_service.py::_extract_json (raw_decode + strict=False + prefer fenced block + 1 retry) and log failure_log level='warn' when the narration/guess fallback is used — currently a silent 'success' that ships placeholder narration to users.",
+    "Add `weather` to SaveRouteRequest/SavedRoute in server.py and send route.weather from Home.jsx saveRoute() so the weather snapshot is persisted.",
+    "Downgrade the weather failure_log entry to level='warn' when temperature_c/sunrise/aqi come back None (Open-Meteo transient failure) instead of reporting 'success' with nulls.",
+    "Fix narration panel clipping (no-scrollbar hides ~390px of content incl. segments, safety note, water-stop pitch).",
+    "Thin out elevation-profile x-axis tick labels."
+  ],
+  "critical_code_review_comments": [
+    "_extract_json's find('{')/rfind('}') strategy is fragile for LLM output containing multiple JSON blocks or trailing prose; json.JSONDecoder().raw_decode with strict=False is the correct primitive.",
+    "Broad `except Exception` blocks in llm_service.py and weather_service.py swallow the exception without logging, which is exactly why this defect was invisible in server logs — log at warning level with the raw payload prefix.",
+    "server.py failure_log level is hardcoded 'success' for the weather stage regardless of the actual payload contents; derive the level from the data.",
+    "weather_service.py imports datetime/timezone but never uses them (dead import).",
+    "server.py is approaching the point where the generate pipeline (170+ lines in one handler) should be extracted into services/pipeline.py for readability/testability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/debug_narrate.py",
+    "/app/backend/tests/debug_generate_repeat.py",
+    "/app/backend/tests/debug_concurrent.py"
+  ],
+  "success_rate": {"backend": "83% (20/24 pytest; 1 deterministic failure + 3 flaky failures from the two RCA'd defects)", "frontend": "100% functional (P0 + both new features pass); 2 design nits"},
+  "seed_data_creation": "Two saved routes named TEST_Saved Route / TEST_Weather Route in db.saved_routes (no delete endpoint exists, so they remain; safe to ignore).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "None required — app has no auth.",
+  "context_for_next_testing_agent": "P0 Delhi city-switch bug is CONFIRMED FIXED (payload + route.start + all coordinates in Delhi bounds; panels clear on city switch) — no need to retest deeply. TurnByTurn and WeatherStrip render correctly and are covered. /app/backend/tests/backend_test.py has 24 tests; run serially with `-n 0` when investigating, because pytest.ini's `-n 2 --dist loadscope` makes each worker create its own session route (extra 40s LLM calls) and occasionally yields a non-JSON gateway response that cascades across a whole class. Remaining open items after fixes: (a) narration JSON parse hardening (re-run TestGenerateClaude::test_narration_populated 3+ times, it is flaky by nature), (b) weather field on /api/routes/save (test_save_persists_weather), (c) weather failure_log level when Open-Meteo returns nulls, (d) narration panel clipping. Debug harnesses debug_narrate.py / debug_generate_repeat.py reproduce (a) quickly without the full suite.",
+  "rca_of_the_issue": "Narration placeholder bug: llm_narrate_route calls _extract_json which takes text[first '{' : last '}'] and json.loads(..., strict=True). Direct capture of raw claude-sonnet-5 responses (tests/debug_narrate.py, 3 runs) produced 2 failures: (1) 'Extra data: line 5 column 1 (char 1631)' — the response contained content after the first JSON object so the naive slice produced two concatenated documents; (2) 'Invalid control character at: line 3 column 650' — the model emitted raw newline characters inside a JSON string, which strict json.loads rejects. On failure the helper returns its own fallback dict, and because no exception escapes, server.py appends failure_log level='success' stage='llm_narration' — so the UI shows a placebo narration with a green success log and nothing in backend logs. Mitigation: raw_decode from the first '{', strict=False, prefer the fenced ```json block, retry once, log the parse error, and set the failure_log entry to 'warn' when the fallback is returned. Verified end-to-end via 6 sequential API calls (tests/debug_generate_repeat.py): 1/3 claude runs hit the fallback while gemini runs passed."
+}

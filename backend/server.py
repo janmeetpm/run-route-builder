@@ -15,6 +15,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from services.route_service import generate_loop_route, compute_elevation_stats, _haversine_m
 from services.llm_service import llm_guess_route, llm_narrate_route
+from services.weather_service import fetch_weather_snapshot
 from services.mock_strava import list_discovery
 
 # Mongo
@@ -60,6 +61,7 @@ class SavedRoute(BaseModel):
     narration: Dict[str, Any]
     failure_log: List[Dict[str, Any]]
     midpoint: List[float]
+    weather: Optional[Dict[str, Any]] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -95,6 +97,11 @@ async def generate(req: GenerateRouteRequest):
             distance_km=req.distance_km,
             constraints=req.constraints.model_dump(),
         )
+        if guess.get("_parse_ok") is False:
+            failure_log.append({
+                "t": now, "level": "warn", "stage": "llm_guess",
+                "message": f"LLM guess unparseable, using synthetic fallback: {guess.get('_parse_error', '')}",
+            })
     except Exception as e:
         guess = {"waypoints": [], "estimated_distance_km": req.distance_km, "reasoning": f"LLM error: {e}", "estimated_ascent_m": 0}
         failure_log.append({
@@ -178,6 +185,41 @@ async def generate(req: GenerateRouteRequest):
             "message": "Warning: real route did not close within 30m. Minor stitch applied.",
         })
 
+    # --- Step 3.5: Weather + AQI + sunrise for the narration ---
+    try:
+        weather = await fetch_weather_snapshot(
+            lat=req.start_lat, lon=req.start_lon, start_time_hhmm=req.constraints.start_time
+        )
+        has_core = weather and weather.get("temperature_c") is not None and weather.get("sunrise") is not None
+        has_any = weather and any(
+            weather.get(k) is not None for k in ("temperature_c", "sunrise", "aqi")
+        )
+        if has_core:
+            level = "success"
+            msg = (
+                f"Weather fetched: {weather.get('temperature_c')}°C, "
+                f"AQI {weather.get('aqi')} ({weather.get('aqi_bucket')}), "
+                f"sunrise {weather.get('sunrise')}."
+            )
+        elif has_any:
+            level = "warn"
+            msg = (
+                f"Partial weather: forecast={weather.get('forecast_status')}, "
+                f"aqi={weather.get('aqi_status')}. "
+                f"Temperature={weather.get('temperature_c')}, sunrise={weather.get('sunrise')}, "
+                f"AQI={weather.get('aqi')}."
+            )
+        else:
+            level = "warn"
+            msg = "Weather fetch returned no usable data (Open-Meteo transient failure or rate limit)."
+        failure_log.append({"t": now, "level": level, "stage": "weather", "message": msg})
+    except Exception as e:
+        weather = None
+        failure_log.append({
+            "t": now, "level": "warn", "stage": "weather",
+            "message": f"Weather fetch failed: {str(e)[:100]}",
+        })
+
     # --- Step 4: LLM narration on real geometry ---
     try:
         narration = await llm_narrate_route(
@@ -188,11 +230,21 @@ async def generate(req: GenerateRouteRequest):
             elevations=route["elevations"],
             constraints=req.constraints.model_dump(),
             steps_preview=route["steps"],
+            weather=weather,
         )
-        failure_log.append({
-            "t": now, "level": "success", "stage": "llm_narration",
-            "message": f"Narration generated via {req.provider} on real elevation profile.",
-        })
+        if narration.get("_parse_ok") is False:
+            failure_log.append({
+                "t": now, "level": "warn", "stage": "llm_narration",
+                "message": f"Narration JSON unparseable; served placeholder. Parse error: {narration.get('_parse_error', '')}",
+            })
+        else:
+            failure_log.append({
+                "t": now, "level": "success", "stage": "llm_narration",
+                "message": f"Narration generated via {req.provider} on real elevation profile.",
+            })
+        # Strip internal signaling keys before returning to the client
+        narration.pop("_parse_ok", None)
+        narration.pop("_parse_error", None)
     except Exception as e:
         narration = {
             "headline": f"{actual_km}km Loop",
@@ -228,6 +280,7 @@ async def generate(req: GenerateRouteRequest):
         "failure_log": failure_log,
         "provider": req.provider,
         "constraints": req.constraints.model_dump(),
+        "weather": weather,
     }
     return result
 
@@ -244,6 +297,7 @@ class SaveRouteRequest(BaseModel):
     narration: Dict[str, Any]
     failure_log: List[Dict[str, Any]]
     midpoint: List[float]
+    weather: Optional[Dict[str, Any]] = None
 
 
 @api_router.post("/routes/save")

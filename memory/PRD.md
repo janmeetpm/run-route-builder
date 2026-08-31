@@ -36,9 +36,16 @@ Create a running route agent that takes start point, distance, pace groups, and 
 - Save / copy GPS actions
 - Custom start via map click
 
+## Implemented (2026-02-18 later)
+- **Delhi city-switch fix**: setCity now clears customStart + previous route
+- **Turn-by-Turn panel**: collapsible list of ORS steps with distance-to-next
+- **Weather-aware narration**: Open-Meteo (temperature, AQI, sunrise, UV, wind) feeds the LLM prompt; UI shows chip strip; failure_log entry per fetch
+- **Hardened LLM JSON parsing**: raw_decode + retry + explicit parse-ok signal; log warn on placeholder fallback
+- **Weather cache** (15 min per lat/lon/hour) to survive Open-Meteo quota
+
 ## Backlog
 - P1: Real Strava OAuth + MCP route discovery
-- P1: Turn-by-turn instructions overlay
+- P1: GPX export
 - P2: Multi-loop / out-and-back variants
-- P2: GPX export
 - P2: Save to public shareable URL
+- P2: ORS retry on distance overshoot >20%

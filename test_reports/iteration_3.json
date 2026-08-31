@@ -1,0 +1,81 @@
+{
+  "summary": "Iteration 3 retest of the 5 iteration-2 fixes plus a smoke of everything. Backend: 33 pytest tests (24 existing + 9 new in tests/test_iteration3.py) -> 30 passed, 3 failed. All 3 failures are the SAME external cause: Open-Meteo FORECAST endpoint now returns HTTP 429 'Daily API request limit exceeded' for this container's IP, so temperature_c / sunrise / uv_index_max / wind / rain are permanently None today (AQI endpoint is a separate quota and still returns data). VERIFIED FIXED: (1) narration parse hardening — 3 sequential claude generations + 1 gemini + 2 delhi all produced real multi-paragraph narration (no placeholder), and the llm_narration failure_log level now provably tracks content (success on parse, warn+'Narration JSON unparseable' prefix on fallback — asserted both directions); (2) POST /api/routes/save accepts and persists `weather` (verified via GET /api/routes/saved: temperature_c/aqi/sunrise keys present; also verified the real UI SAVE persists weather with aqi=180 for Delhi); omitting weather still returns 200 with weather:null; (3) weather failure_log level derivation matches has_any in every run; (4) narration panel now scrolls with a real mouse wheel (scrollTop 379/400) and the bottom fade mask is clearly visible; (5) elevation x-axis has ZERO overlapping tick labels (min gap 36px). P0 Delhi regression still fixed (UI payload start_lat=28.6139, all coordinates inside lat 28-29 / lon 76-78, AQI 180 'extremely poor').",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/routes/generate (weather stage)",
+        "issue": "Open-Meteo forecast API is now rate-limited for this environment: GET https://api.open-meteo.com/v1/forecast -> 429 {'reason':'Daily API request limit exceeded. Please try again tomorrow.'} on 3/3 direct probes. Result: temperature_c, feels_like_c, humidity_pct, wind_kmh, precip_prob_pct, uv_index_max, sunrise, sunset are all None for every route today, while the AQI endpoint (separate quota) still succeeds. Because has_any is satisfied by aqi alone, failure_log still says level='success' with message 'Weather fetched: None°C, AQI 14 (good), sunrise None.' — misleading. Recommend: (a) per-field partial-failure detection (warn when temperature_c OR sunrise is None even if AQI is present, and include the upstream status code in the message), (b) an in-process cache keyed by (round(lat,2), round(lon,2), hour) so repeated generations don't burn the daily quota, (c) surface the 429 reason in the log message. Root cause is quota exhaustion from repeated generate calls, not a code regression."
+      },
+      {
+        "endpoint": "POST /api/routes/generate (weather.before_sunrise)",
+        "issue": "When sunrise is None, before_sunrise silently defaults to False, so the UI SUNRISE chip renders '— / DAYLIGHT' for a 05:30 start (factually wrong: it is pre-dawn). Should be null/'unknown' when sunrise is unavailable so the strip and the LLM safety note do not assert daylight."
+      },
+      {
+        "endpoint": "POST /api/routes/generate (ORS distance)",
+        "issue": "Still overshoots: 5 km requested -> 5.28 / 5.74 / 6.22 / 5.37 km delivered (some runs >20% warn threshold). Carried over from iteration 2, only logged as warn."
+      },
+      {
+        "endpoint": "tests/backend_test.py",
+        "issue": "3 pre-existing assertions now fail purely because of the Open-Meteo 429 (test_weather_field_present: 'bad sunrise None'; test_weather_for_gemini: sunrise is None; test_delhi_generation: sunrise is None). Left as-is deliberately so the degradation stays visible; they should pass again once quota resets or a cache/retry is added."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Narration panel (map top-right)",
+        "issues": [
+          "Fixed but weak affordance: scrollHeight 1167 vs clientHeight 754; wheel scroll works and the bottom fade mask is visible, but the scrollbar gutter measures only 2px (offsetWidth-clientWidth) and the -webkit-mask-image on the same element dims the thumb, so the yellow bar is barely perceptible. Consider 6-8px thumb or an explicit 'scroll for more' chevron."
+        ]
+      },
+      {
+        "screen": "Elevation profile (bottom strip)",
+        "issues": [
+          "No overlap anymore (13 labels, min gap 36px) but the request asked for ~8 max: labels are 0km,0.39,0.85,1.27,1.84,2.1,2.87,3.25,3.92,4.38,4.83,4.96,5.66km — still dense and unevenly spaced (4.83 vs 4.96 adjacent). Raise minTickGap to ~90 if 8 labels is the target."
+        ]
+      },
+      {
+        "screen": "Elevation profile (recharts)",
+        "issues": [
+          "Console warning on every render: 'The width(-1) and height(-1) of chart should be greater than 0 ... add a minWidth(0)/minHeight' from ResponsiveContainer; harmless today but the chart briefly renders at the wrong width after a viewport resize."
+        ]
+      },
+      {
+        "screen": "Weather strip",
+        "issues": [
+          "With the Open-Meteo forecast 429, TEMP/SUNRISE/RAIN all show '—' while SUNRISE also shows 'DAYLIGHT'. No user-facing hint that weather data is unavailable — consider a 'weather unavailable' state instead of em-dashes plus a wrong DAYLIGHT badge."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add caching (lat,lon,hour) and/or retry-with-backoff for Open-Meteo forecast; the daily quota is exhausted so all temperature/sunrise/UV/wind values are null in this environment.",
+    "Make the weather failure_log entry warn on PARTIAL failure (temperature_c or sunrise None) and include the upstream HTTP status/reason, not just the all-None case.",
+    "Return before_sunrise as null/unknown when sunrise is unavailable (UI currently claims DAYLIGHT for a 05:30 start).",
+    "Optional polish: minTickGap ~90 on the elevation XAxis for <=8 labels; thicken the narration scrollbar thumb (mask dims it to ~2px)."
+  ],
+  "critical_code_review_comments": [
+    "weather_service._gather swallows exceptions and discards non-200 responses without logging the status/body — the 429 quota exhaustion was completely invisible in backend logs; log at warning with r.status_code and r.text[:200].",
+    "_hour_index falls back to `return 0` when no hour matches, which silently mislabels the snapshot hour; return None or the nearest hour instead.",
+    "Narration/guess internal signal keys `_parse_ok` / `_parse_error` are returned inside the public `narration` object of /api/routes/generate; strip them from the API response (they leak internals into the saved Mongo doc too).",
+    "llm_service retry loop re-sends the identical prompt on the same chat session; on parse failure a corrective 'return JSON only' follow-up would raise the retry success rate."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py"
+  ],
+  "success_rate": {"backend": "91% (30/33; all 3 failures caused by Open-Meteo 429 quota)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Created TEST_iter3_weather / TEST_iter3_noweather / TEST_Saved Route / TEST_Weather Route saved routes; all 9 TEST_* docs deleted from Mongo after the run. One UI-created doc 'Circling Smoke Over CP' (Delhi) left in place as evidence that weather persists from the frontend.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "None required (no auth in app)",
+  "context_for_next_testing_agent": "All 5 iteration-2 fixes verified. New tests live in /app/backend/tests/test_iteration3.py (narration level<->content consistency across 3 repeats, weather level<->payload consistency, save-with/without-weather, Delhi bounds+AQI). The only open backend issue is Open-Meteo forecast 429 daily quota in this container (AQI endpoint still works) — re-run tests/backend_test.py::TestGenerateClaude::test_weather_field_present after a quota reset or after caching is added; if temperature_c/sunrise are still None, probe https://api.open-meteo.com/v1/forecast directly to confirm the 429 before blaming the code. Route generation takes 25-45s; use >=90s timeouts.",
+  "rca_of_the_issue": "Sunrise/temperature nulls: Open-Meteo's forecast endpoint returns HTTP 429 'Daily API request limit exceeded' for this container's egress IP (confirmed by 3 direct probes), while the air-quality endpoint has a separate quota and still returns 200. weather_service._gather treats any non-200 as None without logging, so the failure surfaced only as null fields; server.py's has_any check is satisfied by the AQI value alone, so the failure_log still reports level='success' with 'None°C ... sunrise None'. Mitigation: cache per (lat,lon,hour), retry with backoff, log upstream status, and warn on partial nulls."
+}

@@ -165,6 +165,39 @@ class TestGenerateClaude:
         assert isinstance(steps, list) and len(steps) > 0
         assert "instruction" in steps[0]
 
+    # NEW (iteration_2): steps must carry distance_m for the turn-by-turn panel
+    def test_steps_have_distance(self, generated_claude):
+        steps = generated_claude.json()["steps"]
+        assert len(steps) >= 2, f"turn-by-turn needs multiple steps, got {len(steps)}"
+        for s in steps:
+            assert "distance_m" in s, f"step missing distance_m: {s}"
+            assert isinstance(s["distance_m"], (int, float))
+        assert any(s["distance_m"] > 0 for s in steps)
+
+    # NEW (iteration_2): weather field
+    def test_weather_field_present(self, generated_claude):
+        d = generated_claude.json()
+        assert "weather" in d, "route payload missing 'weather'"
+        w = d["weather"]
+        if w is None:
+            pytest.fail("weather is null - Open-Meteo fetch failed (endpoint still 200)")
+        for k in ["temperature_c", "aqi", "aqi_bucket", "sunrise", "before_sunrise"]:
+            assert k in w, f"weather missing key {k}"
+        assert isinstance(w["before_sunrise"], bool)
+        assert w["aqi_bucket"] in [
+            "good", "fair", "moderate", "poor", "very poor", "extremely poor", "unknown",
+        ]
+        assert w["sunrise"] and "T" in w["sunrise"], f"bad sunrise {w['sunrise']}"
+        assert w["temperature_c"] is not None
+        assert -30 <= w["temperature_c"] <= 60
+
+    # NEW (iteration_2): failure_log must gain a weather stage entry
+    def test_failure_log_weather_stage(self, generated_claude):
+        log = generated_claude.json()["failure_log"]
+        weather_entries = [e for e in log if e["stage"] == "weather"]
+        assert weather_entries, f"no 'weather' stage in failure_log stages={[e['stage'] for e in log]}"
+        assert weather_entries[0]["level"] in ["success", "warn"]
+
 
 class TestGenerateGemini:
     def test_status_and_narration(self, generated_gemini):
@@ -178,6 +211,18 @@ class TestGenerateGemini:
         assert len(d["coordinates"]) > 50
         assert len(d["failure_log"]) >= 2
 
+    # NEW (iteration_2): gemini path must also return weather + weather stage
+    def test_weather_for_gemini(self, generated_gemini):
+        d = generated_gemini.json()
+        assert "weather" in d
+        w = d["weather"]
+        if w is None:
+            pytest.fail("weather is null for gemini provider")
+        assert w["aqi_bucket"] is not None
+        assert w["sunrise"] is not None
+        stages = {e["stage"] for e in d["failure_log"]}
+        assert "weather" in stages
+
 
 class TestGenerateValidation:
     def test_missing_fields_422(self, api):
@@ -190,13 +235,24 @@ class TestGenerateValidation:
             start_name="Connaught Place, Delhi",
             start_lon=77.209,
             start_lat=28.6139,
-            distance_km=4,
+            distance_km=5,
         )
         r = api.post(f"{BASE_URL}/api/routes/generate", json=payload, timeout=GEN_TIMEOUT)
         assert r.status_code == 200, f"body={r.text[:500]}"
         d = r.json()
         assert len(d["coordinates"]) > 50
         assert d["distance_km"] > 1
+        # NEW (iteration_2): echoed start + all geometry must be inside Delhi bounds
+        assert d["start"] == [77.209, 28.6139], f"start echoed wrong: {d['start']}"
+        for lon, lat in d["coordinates"]:
+            assert 28.0 <= lat <= 29.0, f"coordinate outside Delhi lat bounds: {lat}"
+            assert 76.0 <= lon <= 78.0, f"coordinate outside Delhi lon bounds: {lon}"
+        assert 28.0 <= d["midpoint"][1] <= 29.0
+        w = d["weather"]
+        if w is None:
+            pytest.fail("Delhi route returned null weather")
+        assert w["sunrise"] is not None
+        assert w["aqi_bucket"] != "unknown", f"aqi_bucket unknown, aqi={w['aqi']}"
 
 
 # ---------- saved routes ----------
@@ -240,3 +296,33 @@ class TestSavedRoutes:
     def test_save_invalid_payload_422(self, api):
         r = api.post(f"{BASE_URL}/api/routes/save", json={"name": "TEST_bad"}, timeout=30)
         assert r.status_code == 422
+
+    # NEW (iteration_2): saving must persist the weather snapshot
+    def test_save_persists_weather(self, api, generated_claude):
+        d = generated_claude.json()
+        payload = {
+            "name": "TEST_Weather Route",
+            "city": "Bengaluru",
+            "distance_km": d["distance_km"],
+            "ascent_m": d["elev_stats"]["ascent_m"],
+            "provider": d["provider"],
+            "coordinates": d["coordinates"],
+            "elevations": d["elevations"],
+            "cumulative_distance_m": d["cumulative_distance_m"],
+            "narration": d["narration"],
+            "failure_log": d["failure_log"],
+            "midpoint": d["midpoint"],
+            "weather": d["weather"],
+        }
+        r = api.post(f"{BASE_URL}/api/routes/save", json=payload, timeout=60)
+        assert r.status_code == 200, r.text[:400]
+        saved_id = r.json()["id"]
+
+        lr = api.get(f"{BASE_URL}/api/routes/saved", timeout=30)
+        assert lr.status_code == 200
+        match = [x for x in lr.json()["routes"] if x["id"] == saved_id]
+        assert match, "route not persisted"
+        got = match[0]
+        assert "weather" in got, "weather field dropped on save (SaveRouteRequest has no weather field)"
+        assert got["weather"] is not None
+        assert got["weather"].get("aqi_bucket") == d["weather"]["aqi_bucket"]

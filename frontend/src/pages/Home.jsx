@@ -9,6 +9,8 @@ import RouteMap from "@/components/RouteMap";
 import NarrationPanel from "@/components/NarrationPanel";
 import FailureLog from "@/components/FailureLog";
 import ElevationProfile from "@/components/ElevationProfile";
+import TurnByTurn from "@/components/TurnByTurn";
+import WeatherStrip from "@/components/WeatherStrip";
 import { PANELS, BUILDER } from "@/constants/testIds";
 import { Compass, GearSix, Barbell, FloppyDisk, ShareNetwork } from "@phosphor-icons/react";
 import useSWR from "swr";
@@ -17,11 +19,19 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const fetcher = (url) => axios.get(url).then((r) => r.data);
 
 export default function Home() {
-  const [city, setCity] = useState("bengaluru");
+  const [city, setCityState] = useState("bengaluru");
   const [route, setRoute] = useState(null);
   const [loading, setLoading] = useState(false);
   const [customStart, setCustomStart] = useState(null);
   const [tab, setTab] = useState("builder");
+
+  // Switching city must wipe any custom pin so the default city start is used,
+  // otherwise a pin set for Bengaluru would still be sent when the user picks Delhi.
+  const setCity = (next) => {
+    setCityState(next);
+    setCustomStart(null);
+    setRoute(null);
+  };
 
   const { data: discovery } = useSWR(`${API}/discovery?city=${city}`, fetcher);
 
@@ -66,6 +76,7 @@ export default function Home() {
         narration: route.narration,
         failure_log: route.failure_log,
         midpoint: route.midpoint,
+        weather: route.weather,
       });
       toast.success("Saved to your locker.");
     } catch (e) {
@@ -161,7 +172,9 @@ export default function Home() {
       {/* MAP AREA */}
       <main className="flex-1 relative h-full">
         <RouteMap city={city} route={route} onMapClick={onMapClick} />
+        {route && <TurnByTurn steps={route.steps} />}
         {route && <NarrationPanel route={route} />}
+        {route && <WeatherStrip weather={route.weather} />}
         {route && <ElevationProfile route={route} />}
         {!route && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none z-10">

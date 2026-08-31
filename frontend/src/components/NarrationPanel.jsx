@@ -9,8 +9,8 @@ export default function NarrationPanel({ route }) {
   return (
     <div
       data-testid={PANELS.narration}
-      className="absolute top-6 right-6 w-[380px] max-h-[70vh] overflow-y-auto no-scrollbar
-        bg-black/70 backdrop-blur-xl border border-white/20 rounded-md p-5 z-20 shadow-2xl"
+      className="absolute top-6 right-6 w-[380px] max-h-[70vh] overflow-y-auto
+        bg-black/70 backdrop-blur-xl border border-white/20 rounded-md p-5 z-20 shadow-2xl narration-scroll"
     >
       <div className="flex items-center gap-2 mb-2">
         <div className="w-1.5 h-1.5 rounded-full bg-[#DFFF00]" />

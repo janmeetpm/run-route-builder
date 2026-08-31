@@ -43,6 +43,8 @@ export default function ElevationProfile({ route }) {
               tickLine={false}
               axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
               unit="km"
+              interval="preserveStartEnd"
+              minTickGap={90}
             />
             <YAxis
               tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "JetBrains Mono" }}
