@@ -1,0 +1,126 @@
+{
+  "theme": "dark",
+  "archetype": "THE PERFORMANCE PRO",
+  "typography": {
+    "heading_font": "Barlow Condensed",
+    "body_font": "DM Sans",
+    "mono_font": "JetBrains Mono",
+    "rules": [
+      "Use Barlow Condensed (800/900 weight) for hero-level headings, route names, and large metrics. Apply uppercase and tracking-wide.",
+      "Use DM Sans for all body text, form labels, and standard UI elements with increased tracking.",
+      "Use JetBrains Mono exclusively for the 'Failure Log' to give it a diagnostic, technical terminal feel.",
+      "Never use Inter, Roboto, or Open Sans for headings."
+    ]
+  },
+  "colors": {
+    "background": "#0A0A0A",
+    "surface": "#121212",
+    "surface_glass": "rgba(18, 18, 18, 0.75)",
+    "border": "rgba(255, 255, 255, 0.12)",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "accent_primary": "#DFFF00",
+    "accent_secondary": "#007AFF",
+    "alert": "#FF3B30",
+    "water_stop": "#00E5FF",
+    "rules": [
+      "No full-screen gradients. Keep backgrounds solid, dark, and tactical.",
+      "Use #DFFF00 (Volt Yellow) sparingly as a kinetic trigger for the main running route path, active toggles, and primary CTAs.",
+      "Use #00E5FF (Cyan) for water stops and well-lit zone indicators on the map.",
+      "Use #FF3B30 (Blaze) for highlighting LLM hallucinations in the Failure Log.",
+      "Ensure all neutral grays are tinted slightly blue (cool) to feel technical."
+    ]
+  },
+  "layouts": {
+    "app_structure": "Split-pane SPA layout: 35% Sidebar (Builder/Discovery), 65% Interactive Map view.",
+    "sidebar": "Fixed left column, h-screen, scrollable (hide scrollbar). Flat solid surfaces. Dense form layout mimicking an athletic command center.",
+    "map_area": "Full height right column, relative positioning. Mapbox Dark v11 base.",
+    "bento_discovery": "Use 'High Density Grid' (Mode B) for the Strava-inspired route discovery grid. 1 column on mobile, 2 columns in the sidebar. Tight gap-4, sharp edges."
+  },
+  "components": {
+    "sidebar_form": {
+      "style": "Tactical Minimalism. No soft shadows. Use 1px solid borders (border-white/10). Form inputs should have flat bg-white/5 backgrounds.",
+      "spacing": "Dense hierarchy. space-y-6 between major sections. Use space-y-2 for label-to-input.",
+      "testid": "sidebar-route-builder-form"
+    },
+    "failure_log": {
+      "style": "Retro-Futurism 'Terminal' Look. Render inside the sidebar or as a bottom sheet. Deep black background, 1px border-alert, JetBrains Mono font, highlighting how the Map API corrected the LLM's non-closing loops.",
+      "testid": "failure-log-panel"
+    },
+    "narration_panel": {
+      "style": "Crystal Glass variant (Glassmorphism). Floating over the top-right of the map. backdrop-blur-2xl, bg-black/60, 1px inner border-white/20. High-contrast text.",
+      "testid": "narration-panel"
+    },
+    "elevation_chart": {
+      "style": "Placed at the bottom of the map area. Solid dark background or heavy glass. Monochromatic chart with #DFFF00 line and gradient fill.",
+      "testid": "elevation-profile"
+    },
+    "route_card": {
+      "style": "Grid Borders look. Sharp corners (rounded-none or max rounded-md). Hover: -translate-y-1, hover:bg-white/10, subtle left-border transition.",
+      "testid": "discovery-route-card"
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": "Mix flat panels (sidebar) with Crystal Glass (map overlays) to create depth. No muddy gray transparency.",
+    "borders": "Expose the skeleton. Use 1px borders everywhere to create a rigid, technical grid feel.",
+    "textures": "Subtle noise overlay on the sidebar background to remove digital flatness."
+  },
+  "motion": {
+    "hover_states": "High-contrast color flips (e.g., bg-transparent text-accent -> bg-accent text-black).",
+    "transitions": "Use transition-colors duration-200 and transition-transform duration-300.",
+    "map_animations": "Smooth flyTo transitions between Bengaluru and Delhi locations."
+  },
+  "media": {
+    "images": {
+      "bengaluru_morning": {
+        "url": "https://images.unsplash.com/photo-1706241137081-4b5e0f038d88",
+        "description": "Bengaluru city skyline at dusk/dawn, use for Bengaluru route discovery cards."
+      },
+      "delhi_morning": {
+        "url": "https://images.unsplash.com/photo-1695667424131-a9680e0307ee",
+        "description": "Delhi city skyline, use for Delhi route discovery cards."
+      },
+      "running_track": {
+        "url": "https://images.unsplash.com/photo-1758922769578-68c5ba000d87",
+        "description": "Athlete running on track, use for default state or hero banners."
+      }
+    },
+    "rules": [
+      "Use specific images for location cards.",
+      "Never use placeholder URLs (like via.placeholder.com)."
+    ]
+  },
+  "accessibility": {
+    "contrast": "All text over map or images must have sufficient text-shadow or a solid scrim.",
+    "focus": "All interactive elements must use focus:outline-none focus:ring-2 focus:ring-[#DFFF00].",
+    "aria": "Include aria-labels for map controls, sliders, and form toggles."
+  },
+  "external_libraries": {
+    "icons": "@phosphor-icons/react (Duotone weight for high-end tactical look)",
+    "maps": "react-map-gl, mapbox-gl",
+    "charts": "recharts",
+    "animations": "framer-motion",
+    "notifications": "sonner"
+  },
+  "instructions_to_main_agent": [
+    "Create a split-pane layout with a Sidebar (left) and Interactive Map (right).",
+    "The Sidebar should have two tabs/states: 'Builder' (form) and 'Discover' (Strava-style bento grid).",
+    "Do NOT use HTML input type='range' or <select>. Use Shadcn Slider, Select, Checkbox, Tabs.",
+    "Implement the 'Failure Log' to demonstrate the LLM vs API routing trade-off. Give it a distinct terminal-like UI using JetBrains Mono.",
+    "Implement the 'Narration Panel' as a floating glass card on top of the Mapbox map, narrating the ups and downs of the route.",
+    "Implement an Elevation Profile chart using Recharts docked at the bottom of the map.",
+    "Ensure the primary map route is drawn using the #DFFF00 (Volt Yellow) color for high visibility.",
+    "Add data-testid attributes to all form inputs, tabs, and major panels.",
+    "DO NOT use complete `transparent` background in header, overlays, any surface that has content under it."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) ONLY for floating panels. Always include a semi-transparent background color (e.g., bg-black/60).",
+    "You MUST NOT apply universal transition (transition: all). Use specific transitions (transition-colors, transition-transform).",
+    "Always use modern button styles (sharp corners or max 4px radius) with interaction animations.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠.",
+    "Prioritize using pre-existing components from src/components/ui.",
+    "Do not center align the app container. Maintain left alignment for text readability.",
+    "Use sonner for toast notifications."
+  ]
+}

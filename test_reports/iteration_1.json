@@ -1,0 +1,46 @@
+{
+  "summary": "First end-to-end test of Trailscribe. Backend: 19/19 pytest tests passed (health, discovery for bengaluru/delhi + 404/422 edge cases, POST /api/routes/generate with claude and gemini incl. geometry/elevation/narration/llm_guess/failure_log assertions, Delhi generation, save + saved-list persistence, validation). Frontend: home page, sidebar, all form testids, mapbox render, discovery tabs/cards, city switch, discovery-card pick, first route generation (claude on Delhi + gemini on Bengaluru), narration panel, elevation profile, failure log with LLM-vs-map line, and SAVE (200 + success toast) all work. ONE CRITICAL frontend bug: generating a SECOND route crashes the app with an uncaught Mapbox error (whitescreen / runtime-error overlay) due to a layer-id mismatch in RouteMap.jsx cleanup.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/routes/generate", "issue": "ORS round_trip overshoots the requested distance substantially: 5km request -> 6.62km actual, 7km request -> 9.03km actual (~29% over). Within the agreed 2.5-8km tolerance for a 5km ask, but the UI shows the requested value on the slider while the map/narration show a much larger route with no note that ORS could not honour the target."},
+      {"endpoint": "app-level", "issue": "FastAPI @app.on_event(\"shutdown\") is deprecated; migrate to lifespan handlers."},
+      {"endpoint": "services/route_service.py", "issue": "avoid_highways constraint is a documented no-op for the foot-walking profile (pass block). Constraint is accepted from the client but never affects geometry - only narration."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "RouteMap.jsx",
+        "issue": "CRITICAL: second (and every subsequent) route generation crashes the whole app. clearLayer() is called for ids 'route-line' and 'route-glow', but the layers actually created are 'route-glow' and 'route-line-top'. removeSource('route-line') therefore throws \"Source 'route-line' cannot be removed while layer 'route-line-top' is using it\", the effect aborts, and the next addSource throws the uncaught \"There is already a source with ID 'route-line'\" -> React error overlay / blank screen. Narration panel never appears on the 2nd generate. Fix: clear 'route-line-top' (and 'route-glow') layers before removing the 'route-line' source, wrap in try/catch, e.g. ['route-glow','route-line-top'].forEach(id => map.getLayer(id) && map.removeLayer(id)); then removeSource('route-line').",
+        "selector": "[data-testid=\"generate-route-btn\"] / [data-testid=\"route-map\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {"flow": "Re-generate route", "issue": "POST /api/routes/generate succeeds but the UI cannot render the new route; app throws an uncaught runtime error and the user must reload the page. Every other flow (first generate, save, discovery) is fine.", "affected_selectors": ["[data-testid=\"generate-route-btn\"]", "[data-testid=\"narration-panel\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Sidebar (1920x1080)", "issues": ["Failure log panel is clipped at the viewport bottom on a 1080p screen; SAVE / COPY GPS buttons require scrolling the sidebar and are not discoverable after a route is generated.", "Narration panel (max-h-70vh) clips the segments list; scroll is silent with no-scrollbar so there is no affordance indicating more content."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "CRITICAL: fix RouteMap.jsx layer cleanup ('route-line-top' is never removed) so repeat generations work instead of whitescreening the app.",
+    "Consider surfacing an info/warn failure_log entry when the ORS actual distance deviates >20% from the requested distance, so the slider value vs the real route is explained.",
+    "Optional: make SAVE / COPY GPS sticky in the sidebar so they are visible without scrolling; add a scroll affordance to the narration panel."
+  ],
+  "critical_code_review_comments": [
+    "RouteMap.jsx: layer ids used at creation ('route-glow', 'route-line-top') do not match ids passed to clearLayer ('route-line', 'route-glow'); wrap all map.removeLayer/removeSource calls in try/catch since Mapbox throws synchronously inside a React effect.",
+    "route_service.generate_loop_route: no retry when ORS returns a route far from the requested length; a single seed can overshoot by ~30%.",
+    "server.py generate(): two sequential LLM calls with no timeout guard - a slow provider will hold the request for the full client 90s timeout."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py", "/app/test_reports/iteration_1.json"],
+  "success_rate": {"backend": "100%", "frontend": "90%"},
+  "seed_data_creation": "One saved route named 'TEST_Saved Route' plus routes saved via the UI SAVE button are in the saved_routes collection.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "None - /app/memory/test_credentials.md documents that no auth exists in this MVP; all endpoints public.",
+  "context_for_next_testing_agent": "Backend regression suite lives at /app/backend/tests/backend_test.py (19 tests, session-scoped generate fixtures; run takes ~80s; use timeout>=150s for /api/routes/generate). Frontend flows verified: load, all builder testids, mapbox render, discovery both cities, card pick, first generate (claude+gemini), narration/elevation/failure-log, SAVE. NOT verifiable until the RouteMap fix lands: repeat generation, route redraw after city switch. Retest by generating twice in a row and asserting no console error containing 'already a source with ID'.",
+  "rca_of_the_issue": "RouteMap.jsx draw effect creates layers 'route-glow' and 'route-line-top' on source 'route-line', but the cleanup helper is invoked with ids 'route-line' and 'route-glow'. On re-render, map.removeSource('route-line') throws because 'route-line-top' still references it; the exception escapes the useEffect, so markers/layers are left in place and the subsequent map.addSource('route-line') throws 'There is already a source with ID route-line', producing an uncaught React runtime error and a blank app. Reproduce: load app -> GENERATE ROUTE -> wait for narration -> GENERATE ROUTE again."
+}
