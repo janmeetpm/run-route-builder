@@ -1,8 +1,12 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Cookie
+from fastapi.responses import RedirectResponse, PlainTextResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import time
+import hashlib
+import secrets as pysecrets
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +21,7 @@ from services.route_service import generate_loop_route, compute_elevation_stats,
 from services.llm_service import llm_guess_route, llm_narrate_route
 from services.weather_service import fetch_weather_snapshot
 from services.mock_strava import list_discovery
+from services import strava_service as strava
 
 # Mongo
 mongo_url = os.environ["MONGO_URL"]
@@ -79,6 +84,36 @@ async def discovery(city: str):
     if not routes:
         raise HTTPException(404, f"No routes for city '{city}'")
     return {"city": city, "routes": routes}
+
+
+CITY_BBOX = {
+    # south, west, north, east
+    "bengaluru": (12.87, 77.49, 13.10, 77.75),
+    "delhi": (28.52, 77.10, 28.75, 77.34),
+}
+
+
+@api_router.get("/strava/city_segments")
+async def strava_city_segments(request: Request, city: str, activity_type: str = "running"):
+    """Real Strava segments for a city, ranked by athlete_count."""
+    if city.lower() not in CITY_BBOX:
+        raise HTTPException(404, f"City '{city}' not configured")
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(401, "Connect Strava first")
+    token = await strava.valid_access_token(db, sid)
+    if not token:
+        raise HTTPException(401, "Strava token unavailable, please reconnect")
+    south, west, north, east = CITY_BBOX[city.lower()]
+    status, data = await strava.strava_get(
+        token, "/segments/explore",
+        {"bounds": f"{south},{west},{north},{east}", "activity_type": activity_type},
+    )
+    if status >= 400:
+        raise HTTPException(status, str(data)[:300])
+    segs = data.get("segments", [])
+    segs.sort(key=lambda s: (s.get("athlete_count", 0), s.get("effort_count", 0)), reverse=True)
+    return {"city": city, "segments": segs[:20]}
 
 
 @api_router.post("/routes/generate")
@@ -311,6 +346,173 @@ async def save_route(req: SaveRouteRequest):
 async def get_saved():
     docs = await db.saved_routes.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
     return {"routes": docs}
+
+
+# ---------- Strava OAuth + segments ----------
+
+STRAVA_COOKIE = "trailscribe_sid"
+
+
+def _get_sid(request: Request) -> Optional[str]:
+    raw = request.cookies.get(STRAVA_COOKIE)
+    return strava.unsign_sid(raw) if raw else None
+
+
+def _set_sid_cookie(response: Response, sid: str):
+    response.set_cookie(
+        STRAVA_COOKIE, strava.sign_sid(sid),
+        httponly=True, secure=True, samesite="lax",
+        max_age=60 * 60 * 24 * 30, path="/",
+    )
+
+
+@api_router.get("/strava/authorize")
+async def strava_authorize(request: Request):
+    sid = _get_sid(request) or strava.new_session_id()
+    state = pysecrets.token_urlsafe(24)
+    state_hash = hashlib.sha256(state.encode()).hexdigest()
+    await db.strava_sessions.update_one(
+        {"_id": sid},
+        {"$set": {"state_hash": state_hash, "updated_at": time.time()}},
+        upsert=True,
+    )
+    url = strava.build_authorize_url(state)
+    resp = RedirectResponse(url, status_code=307)
+    _set_sid_cookie(resp, sid)
+    return resp
+
+
+@api_router.get("/strava/callback")
+async def strava_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    scope: Optional[str] = None,
+):
+    frontend = os.environ.get("STRAVA_FRONTEND_URL", "/")
+    if error:
+        return RedirectResponse(f"{frontend}/?strava=error&reason={error}", status_code=303)
+    if not code or not state:
+        raise HTTPException(400, "Missing code/state from Strava")
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(400, "Missing session cookie")
+    doc = await db.strava_sessions.find_one({"_id": sid})
+    expected = hashlib.sha256(state.encode()).hexdigest()
+    if not doc or not pysecrets.compare_digest(doc.get("state_hash", ""), expected):
+        raise HTTPException(400, "Invalid or expired OAuth state")
+
+    try:
+        tok = await strava.exchange_code(code)
+    except Exception as e:
+        return RedirectResponse(f"{frontend}/?strava=error&reason=token_exchange", status_code=303)
+
+    athlete = tok.get("athlete") or {}
+    await db.strava_sessions.update_one(
+        {"_id": sid},
+        {"$set": {
+            "access_token": tok["access_token"],
+            "refresh_token": tok["refresh_token"],
+            "expires_at": tok["expires_at"],
+            "scope": (scope or "").split(","),
+            "athlete_id": athlete.get("id"),
+            "athlete": {
+                "id": athlete.get("id"),
+                "firstname": athlete.get("firstname"),
+                "lastname": athlete.get("lastname"),
+                "profile": athlete.get("profile"),
+                "city": athlete.get("city"),
+                "country": athlete.get("country"),
+            },
+            "state_hash": None,
+            "updated_at": time.time(),
+        }},
+    )
+    return RedirectResponse(f"{frontend}/?strava=connected", status_code=303)
+
+
+@api_router.get("/strava/status")
+async def strava_status(request: Request):
+    sid = _get_sid(request)
+    if not sid:
+        return {"connected": False}
+    doc = await db.strava_sessions.find_one({"_id": sid})
+    if not doc or not doc.get("access_token"):
+        return {"connected": False}
+    return {
+        "connected": True,
+        "athlete": doc.get("athlete") or {},
+        "scope": doc.get("scope") or [],
+        "expires_at": doc.get("expires_at"),
+    }
+
+
+@api_router.post("/strava/logout")
+async def strava_logout(request: Request):
+    sid = _get_sid(request)
+    if sid:
+        await db.strava_sessions.update_one(
+            {"_id": sid},
+            {"$unset": {"access_token": "", "refresh_token": "", "expires_at": "", "athlete": "", "athlete_id": ""}},
+        )
+    resp = Response(status_code=200)
+    resp.delete_cookie(STRAVA_COOKIE, path="/")
+    return resp
+
+
+@api_router.get("/strava/activities")
+async def strava_activities(request: Request, page: int = 1, per_page: int = 20):
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(401, "Connect Strava first")
+    token = await strava.valid_access_token(db, sid)
+    if not token:
+        raise HTTPException(401, "Strava token unavailable, please reconnect")
+    status, data = await strava.strava_get(token, "/athlete/activities", {"page": page, "per_page": per_page})
+    if status >= 400:
+        raise HTTPException(status, str(data)[:300])
+    # Only runs
+    runs = [a for a in data if a.get("type") in ("Run", "TrailRun") or a.get("sport_type", "").endswith("Run")]
+    return {"activities": runs}
+
+
+class RankRequest(BaseModel):
+    coordinates: List[List[float]]
+    activity_type: str = "running"
+
+
+@api_router.post("/routes/rank_by_strava")
+async def rank_route_by_strava(req: RankRequest, request: Request):
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(401, "Connect Strava first")
+    token = await strava.valid_access_token(db, sid)
+    if not token:
+        raise HTTPException(401, "Strava token unavailable, please reconnect")
+    result = await strava.rank_segments_along_route(
+        token=token, route_coords=req.coordinates, activity_type=req.activity_type
+    )
+    return result
+
+
+class GpxRequest(BaseModel):
+    name: str = "Trailscribe route"
+    coordinates: List[List[float]]
+    elevations: Optional[List[float]] = None
+
+
+@api_router.post("/routes/gpx")
+async def route_gpx(req: GpxRequest):
+    if not req.coordinates:
+        raise HTTPException(422, "coordinates must be a non-empty list of [lon, lat] pairs")
+    xml = strava.build_gpx(req.name, req.coordinates, req.elevations)
+    safe = "".join(c for c in req.name if c.isalnum() or c in "-_")[:40] or "route"
+    return PlainTextResponse(
+        xml,
+        media_type="application/gpx+xml",
+        headers={"Content-Disposition": f'attachment; filename="{safe}.gpx"'},
+    )
 
 
 # ---------- App wiring ----------

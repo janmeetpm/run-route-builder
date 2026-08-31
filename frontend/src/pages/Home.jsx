@@ -11,8 +11,10 @@ import FailureLog from "@/components/FailureLog";
 import ElevationProfile from "@/components/ElevationProfile";
 import TurnByTurn from "@/components/TurnByTurn";
 import WeatherStrip from "@/components/WeatherStrip";
+import StravaConnect from "@/components/StravaConnect";
+import StravaSafety from "@/components/StravaSafety";
 import { PANELS, BUILDER } from "@/constants/testIds";
-import { Compass, GearSix, Barbell, FloppyDisk, ShareNetwork } from "@phosphor-icons/react";
+import { Compass, GearSix, Barbell, FloppyDisk, ShareNetwork, DownloadSimple, ArrowSquareOut } from "@phosphor-icons/react";
 import useSWR from "swr";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -24,6 +26,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [customStart, setCustomStart] = useState(null);
   const [tab, setTab] = useState("builder");
+  const [strava, setStrava] = useState({ connected: false });
 
   // Switching city must wipe any custom pin so the default city start is used,
   // otherwise a pin set for Bengaluru would still be sent when the user picks Delhi.
@@ -84,6 +87,41 @@ export default function Home() {
     }
   };
 
+  const downloadGpx = async () => {
+    if (!route) return;
+    try {
+      const resp = await axios.post(
+        `${API}/routes/gpx`,
+        {
+          name: route.narration?.headline || `Trailscribe ${route.distance_km}km`,
+          coordinates: route.coordinates,
+          elevations: route.elevations,
+        },
+        { responseType: "blob" }
+      );
+      const url = URL.createObjectURL(resp.data);
+      const a = document.createElement("a");
+      a.href = url;
+      const safe = (route.narration?.headline || `route-${route.distance_km}km`)
+        .replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+      a.download = `${safe}.gpx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("GPX downloaded. Import to your watch or Strava.");
+    } catch {
+      toast.error("Could not build GPX.");
+    }
+  };
+
+  const openInStravaBuilder = () => {
+    if (!route) return;
+    // Strava's route builder doesn't accept coord params, so we open the builder
+    // and copy the coords to the clipboard for easy paste/import via GPX.
+    navigator.clipboard.writeText(JSON.stringify(route.coordinates));
+    window.open("https://www.strava.com/routes/new", "_blank", "noopener");
+    toast.success("Strava Route Builder opened. Import your downloaded GPX.");
+  };
+
   return (
     <div className="h-screen w-screen flex bg-[#0a0a0a] text-white overflow-hidden">
       {/* SIDEBAR */}
@@ -102,9 +140,12 @@ export default function Home() {
             An LLM guesses your loop. The map API fixes what geometry it got wrong. You get a route
             that <em>actually</em> closes — and a log of every failure.
           </p>
+          <div className="mt-3">
+            <StravaConnect onConnected={setStrava} />
+          </div>
         </div>
 
-        <div className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-6 py-5">
+        <div className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-6 py-5 pb-32">
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList className="grid grid-cols-2 bg-white/5 border border-white/10 rounded-sm p-1 mb-5">
               <TabsTrigger
@@ -144,26 +185,37 @@ export default function Home() {
           <div className="mt-6">
             <FailureLog entries={route?.failure_log} llmGuess={route?.llm_guess} />
           </div>
+          <div className="mt-4">
+            <StravaSafety route={route} stravaConnected={strava.connected} />
+          </div>
         </div>
 
         {route && (
-          <div className="relative z-10 border-t border-white/10 bg-black/60 backdrop-blur-md p-4 flex gap-2">
+          <div className="relative z-10 border-t border-white/10 bg-black/60 backdrop-blur-md p-4 space-y-2">
+            <div className="flex gap-2">
+              <Button
+                data-testid={BUILDER.saveBtn}
+                onClick={saveRoute}
+                className="flex-1 rounded-sm bg-[#DFFF00] hover:bg-[#c9e800] text-black font-head tracking-widest text-xs h-10"
+              >
+                <FloppyDisk size={13} className="mr-1.5" weight="fill" /> SAVE
+              </Button>
+              <Button
+                data-testid="gpx-download-btn"
+                onClick={downloadGpx}
+                variant="outline"
+                className="flex-1 rounded-sm border-white/20 bg-transparent hover:bg-white/5 text-white font-head tracking-widest text-xs h-10"
+              >
+                <DownloadSimple size={13} className="mr-1.5" /> GPX
+              </Button>
+            </div>
             <Button
-              data-testid={BUILDER.saveBtn}
-              onClick={saveRoute}
-              className="flex-1 rounded-sm bg-[#DFFF00] hover:bg-[#c9e800] text-black font-head tracking-widest text-xs h-10"
-            >
-              <FloppyDisk size={13} className="mr-1.5" weight="fill" /> SAVE
-            </Button>
-            <Button
-              onClick={() => {
-                navigator.clipboard.writeText(JSON.stringify(route.coordinates));
-                toast.success("GPX-ready coords copied.");
-              }}
+              data-testid="push-to-strava-btn"
+              onClick={openInStravaBuilder}
               variant="outline"
-              className="flex-1 rounded-sm border-white/20 bg-transparent hover:bg-white/5 text-white font-head tracking-widest text-xs h-10"
+              className="w-full rounded-sm border-[#FC5200]/50 bg-[#FC5200]/10 hover:bg-[#FC5200]/20 text-white font-head tracking-widest text-xs h-9"
             >
-              <ShareNetwork size={13} className="mr-1.5" /> COPY GPS
+              <ArrowSquareOut size={13} className="mr-1.5 text-[#FC5200]" /> PUSH TO STRAVA ROUTE BUILDER
             </Button>
           </div>
         )}

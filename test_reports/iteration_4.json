@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 4: Validated real Strava OAuth surfaces (status/authorize/callback/logout), 401 gates on protected endpoints (city_segments, activities, rank_by_strava), GPX 1.1 export, and regressions (routes/generate, discovery bengaluru+delhi, routes/saved). 23/23 pytest tests pass. Frontend Playwright verified CONNECT STRAVA button, sticky action bar (SAVE/GPX/PUSH TO STRAVA), StravaSafety correctly hidden when disconnected, real GPX file download with correct headers, SAVE persistence, and clipboard+new-tab push flow. No interactive Strava consent attempted, per instructions.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/routes/gpx", "issue": "Empty coordinates array returns HTTP 200 with a valid-but-empty <trkseg> (no trkpt). Not a crash, but arguably should be 400/422 since an empty GPX is unusable in Garmin/Strava importers."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sidebar (post-generation)", "issues": ["The sticky action bar (SAVE/GPX/PUSH TO STRAVA) sits directly over the bottom of the scroll area, so GENERATE ROUTE is visually clipped at first paint after a route exists. It is still reachable/clickable after scrolling (verified click succeeds, no overlay interception) — consider adding bottom padding (pb-32) to the scroll container."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4_strava.py",
+    "/app/test_reports/pytest/iteration4_results.xml"
+  ],
+  "action_items": [
+    "Optional: return 400/422 from POST /api/routes/gpx when coordinates is an empty list.",
+    "Optional polish: add bottom padding to the sidebar scroll container so GENERATE ROUTE isn't visually hidden behind the sticky action bar.",
+    "Optional consistency: server Content-Disposition filename (MGRoadDawnRidgeLoop.gpx) differs from the frontend-forced a.download name (mg-road-dawn-ridge-loop.gpx). Harmless, but pick one."
+  ],
+  "critical_code_review_comments": [
+    "OAuth state handling is correct: state is stored as a sha256 hash keyed by the signed HttpOnly session id, compared with secrets.compare_digest, and cleared on success. Tampered state correctly returns 400 'Invalid or expired OAuth state'. Verified each /authorize call mints a fresh state while reusing the existing sid cookie.",
+    "Cookie flags verified on the wire: trailscribe_sid is HttpOnly, Secure, SameSite=Lax, path=/ — Lax is correct here since the Strava callback is a top-level GET navigation.",
+    "401 gating is layered correctly: missing sid -> 401, and a state-only session (created by /authorize but never token-exchanged) also -> 401 because valid_access_token() returns None. Explicitly tested.",
+    "strava_service.score_segment_overlap is O(n*m) but both sides are downsampled (200 x 80) so worst case ~16k haversine calls per segment; acceptable, but it runs synchronously inside the request for up to ~10 segments — consider offloading if segment counts grow.",
+    "build_gpx escapes &, <, >, \" in the name (verified). Note lat/lon are interpolated without validation — a malformed coordinate pair of length <2 would raise IndexError -> 500; add a Pydantic validator requiring exactly 2 floats per coordinate.",
+    "All Mongo reads used in responses project away _id (verified no _id leaked in /discovery, /routes/saved, /routes/generate responses)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration4_strava.py"],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (all asserted flows passed)"},
+  "seed_data_creation": "One saved route created via the UI SAVE button (POST /api/routes/save -> 200). GPX/authorize tests create transient strava_sessions docs holding only a state_hash (no tokens).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "No app auth. Strava OAuth requires interactive human consent — not exercised. /app/memory/test_credentials.md confirms all endpoints are public.",
+  "context_for_next_testing_agent": "Backend suite for Strava lives at /app/backend/tests/test_iteration4_strava.py (23 tests, all passing). Route generation takes ~25-30s; use >=120s Playwright waits. Note GenerateRouteRequest requires start_name/start_lon/start_lat/distance_km (NOT city/terrain/vibe). Everything behind real Strava OAuth (city_segments, activities, rank_by_strava, StravaSafety panel) can only be smoke-tested via its 401/hidden state until a human completes Strava consent; if a session is ever connected, re-test /api/strava/city_segments?city=bengaluru, /api/strava/activities and the strava-safety panel rendering + score bucket.",
+  "rca_of_the_issue": "No defects found. The only initial test failure was my own incorrect /api/routes/generate payload (used city/terrain/vibe instead of the actual start_name/start_lon/start_lat schema); corrected in the test file and it passes."
+}

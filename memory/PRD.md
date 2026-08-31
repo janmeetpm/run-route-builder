@@ -43,6 +43,14 @@ Create a running route agent that takes start point, distance, pace groups, and 
 - **Hardened LLM JSON parsing**: raw_decode + retry + explicit parse-ok signal; log warn on placeholder fallback
 - **Weather cache** (15 min per lat/lon/hour) to survive Open-Meteo quota
 
+## Implemented (2026-02-18 evening)
+- **Real Strava OAuth** (Client 276007): /api/strava/authorize + /callback + /status + /logout; signed HttpOnly cookie session; scopes read,activity:read,activity:read_all,profile:read_all
+- **Strava segment ranking**: /api/routes/rank_by_strava uses /segments/explore bbox → decodes polylines → overlap-scores segments within 40m of the generated route → 0-100 "safe & tested" score with buckets (battle-tested/well-run/some traffic/quiet route/unrun)
+- **/api/strava/city_segments**: real Strava explore for a city bbox ranked by athlete_count
+- **GPX 1.1 export** /api/routes/gpx (rejects empty coord arrays)
+- **Push to Strava Route Builder** — copies coords + opens routes/new in a new tab
+- Sidebar StravaConnect (orange), StravaSafety panel with clickable segment links
+
 ## Backlog
 - P1: Real Strava OAuth + MCP route discovery
 - P1: GPX export
