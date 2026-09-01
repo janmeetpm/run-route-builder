@@ -13,8 +13,10 @@ import TurnByTurn from "@/components/TurnByTurn";
 import WeatherStrip from "@/components/WeatherStrip";
 import StravaConnect from "@/components/StravaConnect";
 import StravaSafety from "@/components/StravaSafety";
+import FriendOverlap from "@/components/FriendOverlap";
+import WeeklyDigest from "@/components/WeeklyDigest";
 import { PANELS, BUILDER } from "@/constants/testIds";
-import { Compass, GearSix, Barbell, FloppyDisk, ShareNetwork, DownloadSimple, ArrowSquareOut } from "@phosphor-icons/react";
+import { Compass, GearSix, Waveform, FloppyDisk, DownloadSimple, ArrowSquareOut } from "@phosphor-icons/react";
 import useSWR from "swr";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -28,8 +30,6 @@ export default function Home() {
   const [tab, setTab] = useState("builder");
   const [strava, setStrava] = useState({ connected: false });
 
-  // Switching city must wipe any custom pin so the default city start is used,
-  // otherwise a pin set for Bengaluru would still be sent when the user picks Delhi.
   const setCity = (next) => {
     setCityState(next);
     setCustomStart(null);
@@ -41,11 +41,12 @@ export default function Home() {
   const generate = async (payload) => {
     setLoading(true);
     setRoute(null);
-    toast.loading("LLM guessing route… then handing to real map API.", { id: "gen" });
+    toast.loading("LLM guessing route… then handing to the map API.", { id: "gen" });
     try {
       const { data } = await axios.post(`${API}/routes/generate`, payload, { timeout: 90000 });
       setRoute(data);
-      toast.success(`Route ready • ${data.distance_km} km`, { id: "gen" });
+      toast.success(`Route ready · ${data.distance_km} km`, { id: "gen" });
+      setTab("signals"); // reveal the signals panel after generation
     } catch (e) {
       toast.error(e.response?.data?.detail || "Route generation failed", { id: "gen" });
     } finally {
@@ -81,8 +82,8 @@ export default function Home() {
         midpoint: route.midpoint,
         weather: route.weather,
       });
-      toast.success("Saved to your locker.");
-    } catch (e) {
+      toast.success("Saved.");
+    } catch {
       toast.error("Could not save route.");
     }
   };
@@ -107,7 +108,7 @@ export default function Home() {
       a.download = `${safe}.gpx`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("GPX downloaded. Import to your watch or Strava.");
+      toast.success("GPX downloaded.");
     } catch {
       toast.error("Could not build GPX.");
     }
@@ -115,56 +116,63 @@ export default function Home() {
 
   const openInStravaBuilder = () => {
     if (!route) return;
-    // Strava's route builder doesn't accept coord params, so we open the builder
-    // and copy the coords to the clipboard for easy paste/import via GPX.
     navigator.clipboard.writeText(JSON.stringify(route.coordinates));
     window.open("https://www.strava.com/routes/new", "_blank", "noopener");
-    toast.success("Strava Route Builder opened. Import your downloaded GPX.");
+    toast.success("Strava Route Builder opened. Import your GPX.");
   };
 
+  const hasRoute = !!route;
+
   return (
-    <div className="h-screen w-screen flex bg-[#0a0a0a] text-white overflow-hidden">
+    <div className="h-screen w-screen flex bg-[color:var(--bg)] text-[color:var(--ink)] overflow-hidden">
       {/* SIDEBAR */}
-      <aside className="w-[440px] shrink-0 h-full border-r border-white/10 flex flex-col relative grain">
-        <div className="relative z-10 px-6 pt-6 pb-4 border-b border-white/10">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 bg-[#DFFF00] flex items-center justify-center rounded-sm">
-              <Barbell size={14} weight="bold" className="text-black" />
-            </div>
-            <span className="font-head text-lg text-white">TRAILSCRIBE</span>
-            <span className="ml-auto font-mono text-[9px] tracking-widest text-white/40">
-              v0.1 · 05:30 AGENT
-            </span>
+      <aside className="w-[420px] shrink-0 h-full border-r border-[color:var(--line)] bg-[color:var(--bg)] flex flex-col relative paper">
+        {/* Header */}
+        <div className="relative z-10 px-8 pt-8 pb-5">
+          <div className="flex items-baseline justify-between mb-1">
+            <span className="font-display text-2xl tracking-tight text-[color:var(--ink)]">Trailscribe</span>
+            <span className="mut-caps text-[9px]">05:30 · v0.2</span>
           </div>
-          <p className="text-xs text-white/60 leading-relaxed">
-            An LLM guesses your loop. The map API fixes what geometry it got wrong. You get a route
-            that <em>actually</em> closes — and a log of every failure.
+          <p className="text-[13px] text-[color:var(--ink-soft)] leading-relaxed mt-2">
+            An LLM guesses your loop. The map fixes what the LLM got wrong. You keep a log of every failure.
           </p>
-          <div className="mt-3">
-            <StravaConnect onConnected={setStrava} />
-          </div>
+          <div className="mt-4"><StravaConnect onConnected={setStrava} /></div>
         </div>
 
-        <div className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-6 py-5 pb-32">
+        {/* Tabs */}
+        <div className="relative z-10 px-8">
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="grid grid-cols-2 bg-white/5 border border-white/10 rounded-sm p-1 mb-5">
+            <TabsList className="grid grid-cols-3 bg-transparent border-b border-[color:var(--line)] rounded-none p-0 h-auto gap-6 justify-start">
               <TabsTrigger
                 data-testid={PANELS.builderTab}
                 value="builder"
-                className="rounded-sm font-head text-xs tracking-widest data-[state=active]:bg-[#DFFF00] data-[state=active]:text-black"
+                className="rounded-none border-b-2 border-transparent px-0 pb-3 font-head text-[12px] text-[color:var(--ink-mute)] data-[state=active]:border-[color:var(--forest)] data-[state=active]:text-[color:var(--ink)] data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
-                <GearSix size={13} className="mr-1.5" /> BUILDER
+                <GearSix size={12} className="mr-1.5" /> Builder
               </TabsTrigger>
               <TabsTrigger
                 data-testid={PANELS.discoveryTab}
                 value="discover"
-                className="rounded-sm font-head text-xs tracking-widest data-[state=active]:bg-[#DFFF00] data-[state=active]:text-black"
+                className="rounded-none border-b-2 border-transparent px-0 pb-3 font-head text-[12px] text-[color:var(--ink-mute)] data-[state=active]:border-[color:var(--forest)] data-[state=active]:text-[color:var(--ink)] data-[state=active]:bg-transparent data-[state=active]:shadow-none"
               >
-                <Compass size={13} className="mr-1.5" /> DISCOVER
+                <Compass size={12} className="mr-1.5" /> Discover
+              </TabsTrigger>
+              <TabsTrigger
+                data-testid="signals-tab"
+                value="signals"
+                disabled={!hasRoute}
+                className="rounded-none border-b-2 border-transparent px-0 pb-3 font-head text-[12px] text-[color:var(--ink-mute)] data-[state=active]:border-[color:var(--forest)] data-[state=active]:text-[color:var(--ink)] data-[state=active]:bg-transparent data-[state=active]:shadow-none disabled:opacity-40"
+              >
+                <Waveform size={12} className="mr-1.5" /> Signals
               </TabsTrigger>
             </TabsList>
+          </Tabs>
+        </div>
 
-            <TabsContent value="builder">
+        {/* Tab content */}
+        <div className="relative z-10 flex-1 overflow-y-auto no-scrollbar px-8 py-6 pb-40">
+          <Tabs value={tab}>
+            <TabsContent value="builder" className="mt-0">
               <BuilderForm
                 city={city}
                 setCity={setCity}
@@ -174,37 +182,52 @@ export default function Home() {
               />
             </TabsContent>
 
-            <TabsContent value="discover">
-              <div className="mb-3 font-mono text-[10px] tracking-[0.25em] text-white/50">
-                CURATED · {city.toUpperCase()}
-              </div>
+            <TabsContent value="discover" className="mt-0 space-y-4">
+              <div className="mut-caps">Curated · {city}</div>
               <DiscoveryGrid routes={discovery?.routes} onPick={pickDiscovery} />
+              <div className="pt-2">
+                <WeeklyDigest city={city} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="signals" className="mt-0 space-y-4">
+              {!hasRoute && (
+                <div className="text-[13px] text-[color:var(--ink-mute)]">
+                  Generate a route first — signals appear once we have geometry.
+                </div>
+              )}
+              {hasRoute && (
+                <>
+                  <FailureLog entries={route.failure_log} llmGuess={route.llm_guess} />
+                  {strava.connected && <StravaSafety route={route} stravaConnected={strava.connected} />}
+                  {strava.connected && <FriendOverlap route={route} stravaConnected={strava.connected} />}
+                  {!strava.connected && (
+                    <div className="border border-dashed border-[color:var(--line-strong)] rounded-lg p-4 text-[12px] text-[color:var(--ink-mute)] italic">
+                      Connect Strava above to see the “Safe & Tested” score and your own history overlap for this loop.
+                    </div>
+                  )}
+                </>
+              )}
             </TabsContent>
           </Tabs>
-
-          <div className="mt-6">
-            <FailureLog entries={route?.failure_log} llmGuess={route?.llm_guess} />
-          </div>
-          <div className="mt-4">
-            <StravaSafety route={route} stravaConnected={strava.connected} />
-          </div>
         </div>
 
-        {route && (
-          <div className="relative z-10 border-t border-white/10 bg-black/60 backdrop-blur-md p-4 space-y-2">
+        {/* Sticky actions */}
+        {hasRoute && (
+          <div className="relative z-10 border-t border-[color:var(--line)] bg-[color:var(--bg)]/95 backdrop-blur-sm px-8 py-4 space-y-2">
             <div className="flex gap-2">
               <Button
                 data-testid={BUILDER.saveBtn}
                 onClick={saveRoute}
-                className="flex-1 rounded-sm bg-[#DFFF00] hover:bg-[#c9e800] text-black font-head tracking-widest text-xs h-10"
+                className="flex-1 rounded-md bg-[color:var(--forest)] hover:bg-[color:var(--forest-soft)] text-white font-head text-xs h-10"
               >
-                <FloppyDisk size={13} className="mr-1.5" weight="fill" /> SAVE
+                <FloppyDisk size={13} className="mr-1.5" weight="fill" /> Save
               </Button>
               <Button
                 data-testid="gpx-download-btn"
                 onClick={downloadGpx}
                 variant="outline"
-                className="flex-1 rounded-sm border-white/20 bg-transparent hover:bg-white/5 text-white font-head tracking-widest text-xs h-10"
+                className="flex-1 rounded-md border-[color:var(--line-strong)] bg-transparent hover:bg-[color:var(--surface-2)] text-[color:var(--ink)] font-head text-xs h-10"
               >
                 <DownloadSimple size={13} className="mr-1.5" /> GPX
               </Button>
@@ -213,27 +236,27 @@ export default function Home() {
               data-testid="push-to-strava-btn"
               onClick={openInStravaBuilder}
               variant="outline"
-              className="w-full rounded-sm border-[#FC5200]/50 bg-[#FC5200]/10 hover:bg-[#FC5200]/20 text-white font-head tracking-widest text-xs h-9"
+              className="w-full rounded-md border-[color:var(--strava-40)] bg-transparent hover:bg-[color:var(--strava-08)] text-[color:var(--strava)] font-head text-xs h-9"
             >
-              <ArrowSquareOut size={13} className="mr-1.5 text-[#FC5200]" /> PUSH TO STRAVA ROUTE BUILDER
+              <ArrowSquareOut size={12} className="mr-1.5" /> Open in Strava Route Builder
             </Button>
           </div>
         )}
       </aside>
 
       {/* MAP AREA */}
-      <main className="flex-1 relative h-full">
+      <main className="flex-1 relative h-full bg-[color:var(--bg-2)]">
         <RouteMap city={city} route={route} onMapClick={onMapClick} />
-        {route && <TurnByTurn steps={route.steps} />}
-        {route && <NarrationPanel route={route} />}
-        {route && <WeatherStrip weather={route.weather} />}
-        {route && <ElevationProfile route={route} />}
-        {!route && (
+        {hasRoute && <TurnByTurn steps={route.steps} />}
+        {hasRoute && <NarrationPanel route={route} />}
+        {hasRoute && <WeatherStrip weather={route.weather} />}
+        {hasRoute && <ElevationProfile route={route} />}
+        {!hasRoute && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none z-10">
-            <div className="font-head text-5xl text-white/80 tracking-widest">READY TO RUN</div>
-            <div className="font-mono text-[11px] text-white/50 mt-2 tracking-[0.3em]">
-              CLICK THE MAP TO SET A CUSTOM START · OR USE THE BUILDER
+            <div className="font-display text-6xl text-[color:var(--ink)]/85 tracking-tight leading-none">
+              Ready to run.
             </div>
+            <div className="mut-caps mt-4">Click the map to set a custom start · or use the builder</div>
           </div>
         )}
       </main>

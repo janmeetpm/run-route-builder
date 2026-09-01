@@ -5,11 +5,11 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Lightning, Compass, Sun, MoonStars } from "@phosphor-icons/react";
+import { Lightning, Sun, MoonStars } from "@phosphor-icons/react";
 
 const CITIES = [
-  { key: "bengaluru", label: "BENGALURU", start_lon: 77.5946, start_lat: 12.9716, start_name: "MG Road, Bengaluru" },
-  { key: "delhi", label: "DELHI", start_lon: 77.209, start_lat: 28.6139, start_name: "Connaught Place, Delhi" },
+  { key: "bengaluru", label: "Bengaluru", start_lon: 77.5946, start_lat: 12.9716, start_name: "MG Road, Bengaluru" },
+  { key: "delhi", label: "Delhi", start_lon: 77.209, start_lat: 28.6139, start_name: "Connaught Place, Delhi" },
 ];
 
 export default function BuilderForm({ city, setCity, onGenerate, loading, customStart }) {
@@ -33,10 +33,7 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
       distance_km: distance,
       pace_group: pace,
       provider,
-      constraints: {
-        loop, water_stop: waterStop, avoid_highways: avoidHwy,
-        well_lit: wellLit, start_time: startTime,
-      },
+      constraints: { loop, water_stop: waterStop, avoid_highways: avoidHwy, well_lit: wellLit, start_time: startTime },
     });
   };
 
@@ -44,38 +41,40 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
     <form
       data-testid={BUILDER.form}
       onSubmit={(e) => { e.preventDefault(); submit(); }}
-      className="space-y-6"
+      className="space-y-7"
     >
-      {/* City toggle */}
+      {/* City */}
       <div>
-        <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">CITY</Label>
-        <div className="grid grid-cols-2 gap-2 mt-2">
+        <div className="mut-caps mb-3">City</div>
+        <div className="grid grid-cols-2 gap-2">
           {CITIES.map((c) => (
             <button
               key={c.key}
               data-testid={c.key === "bengaluru" ? BUILDER.cityBengaluru : BUILDER.cityDelhi}
               type="button"
               onClick={() => setCity(c.key)}
-              className={`font-head text-sm py-2.5 border rounded-sm transition-colors duration-200 ${
+              className={`font-head text-sm py-2.5 border rounded-md transition-colors duration-200 ${
                 city === c.key
-                  ? "bg-[#DFFF00] text-black border-[#DFFF00]"
-                  : "bg-transparent text-white/70 border-white/15 hover:bg-white/5"
+                  ? "bg-[color:var(--forest)] text-white border-[color:var(--forest)]"
+                  : "bg-transparent text-[color:var(--ink-soft)] border-[color:var(--line-strong)] hover:bg-[color:var(--surface-2)]"
               }`}
             >
               {c.label}
             </button>
           ))}
         </div>
-        <div className="mt-2 font-mono text-[10px] text-white/40">
-          Start: {customStart?.name || cityObj.start_name}
+        <div className="mt-2 font-mono text-[10px] text-[color:var(--ink-mute)]">
+          {customStart?.name || cityObj.start_name}
         </div>
       </div>
 
       {/* Distance */}
       <div>
-        <div className="flex justify-between items-baseline mb-2">
-          <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">DISTANCE</Label>
-          <span className="font-head text-2xl text-[#DFFF00]">{distance} km</span>
+        <div className="flex justify-between items-baseline mb-3">
+          <div className="mut-caps">Distance</div>
+          <span className="font-display text-3xl text-[color:var(--ink)]">
+            {distance}<span className="text-sm text-[color:var(--ink-mute)] ml-1">km</span>
+          </span>
         </div>
         <Slider
           data-testid={BUILDER.distanceSlider}
@@ -84,32 +83,33 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
           min={2}
           max={21}
           step={0.5}
-          className="w-full"
         />
-        <div className="flex justify-between font-mono text-[9px] text-white/30 mt-1">
-          <span>2K</span><span>10K</span><span>HALF</span>
+        <div className="flex justify-between font-mono text-[9px] text-[color:var(--ink-mute)] mt-1.5">
+          <span>2k</span><span>10k</span><span>half</span>
         </div>
       </div>
 
       {/* Pace */}
       <div>
-        <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">PACE GROUP</Label>
-        <div className="grid grid-cols-3 gap-2 mt-2">
+        <div className="mut-caps mb-3">Pace</div>
+        <div className="grid grid-cols-3 gap-2">
           {[
-            { k: "easy", label: "EASY", tid: BUILDER.paceEasy },
-            { k: "tempo", label: "TEMPO", tid: BUILDER.paceTempo },
-            { k: "long", label: "LONG", tid: BUILDER.paceLong },
+            { k: "easy", tid: BUILDER.paceEasy },
+            { k: "tempo", tid: BUILDER.paceTempo },
+            { k: "long", tid: BUILDER.paceLong },
           ].map((p) => (
             <button
               key={p.k}
               data-testid={p.tid}
               type="button"
               onClick={() => setPace(p.k)}
-              className={`font-head text-xs py-2 border rounded-sm transition-colors duration-200 ${
-                pace === p.k ? "bg-white text-black border-white" : "bg-transparent text-white/60 border-white/15 hover:bg-white/5"
+              className={`font-head text-xs py-2 border rounded-md transition-colors duration-200 capitalize ${
+                pace === p.k
+                  ? "bg-[color:var(--ink)] text-white border-[color:var(--ink)]"
+                  : "bg-transparent text-[color:var(--ink-soft)] border-[color:var(--line-strong)] hover:bg-[color:var(--surface-2)]"
               }`}
             >
-              {p.label}
+              {p.k}
             </button>
           ))}
         </div>
@@ -117,25 +117,25 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
 
       {/* Provider */}
       <div>
-        <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">NARRATOR</Label>
+        <div className="mut-caps mb-3">Narrator</div>
         <Select value={provider} onValueChange={setProvider}>
           <SelectTrigger
             data-testid={BUILDER.providerSelect}
-            className="mt-2 bg-white/5 border-white/15 rounded-sm text-white h-10 font-mono"
+            className="bg-white border-[color:var(--line-strong)] rounded-md text-[color:var(--ink)] h-10"
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="bg-[#121212] border-white/15 text-white">
-            <SelectItem value="claude">CLAUDE SONNET 5</SelectItem>
-            <SelectItem value="gemini">GEMINI 3.1 PRO</SelectItem>
+          <SelectContent className="bg-white border-[color:var(--line-strong)]">
+            <SelectItem value="claude">Claude Sonnet 5</SelectItem>
+            <SelectItem value="gemini">Gemini 3.1 Pro</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       {/* Constraints */}
       <div>
-        <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">CONSTRAINTS</Label>
-        <div className="mt-2 space-y-2 border border-white/10 rounded-sm p-3 bg-white/5">
+        <div className="mut-caps mb-3">Constraints</div>
+        <div className="space-y-3">
           <Row label="Loop (no out-and-back)" checked={loop} onChange={setLoop} tid={BUILDER.loopToggle} />
           <Row label="Water stop midway" checked={waterStop} onChange={setWaterStop} tid={BUILDER.waterStopToggle} />
           <Row label="Avoid highways" checked={avoidHwy} onChange={setAvoidHwy} tid={BUILDER.highwaysToggle} />
@@ -145,17 +145,17 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
 
       {/* Start time */}
       <div>
-        <Label className="font-mono text-[10px] tracking-[0.2em] text-white/50">START TIME</Label>
-        <div className="flex items-center gap-2 mt-2">
-          <MoonStars size={16} className="text-white/40" />
+        <div className="mut-caps mb-3">Start time</div>
+        <div className="flex items-center gap-3">
+          <MoonStars size={16} className="text-[color:var(--ink-mute)]" />
           <input
             data-testid={BUILDER.startTime}
             type="time"
             value={startTime}
             onChange={(e) => setStartTime(e.target.value)}
-            className="bg-white/5 border border-white/15 rounded-sm px-3 py-2 font-mono text-sm text-white flex-1"
+            className="bg-white border border-[color:var(--line-strong)] rounded-md px-3 py-2 font-mono text-sm text-[color:var(--ink)] flex-1"
           />
-          <Sun size={16} className="text-[#DFFF00]" />
+          <Sun size={16} className="text-[color:var(--sun)]" />
         </div>
       </div>
 
@@ -163,10 +163,10 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
         data-testid={BUILDER.generateBtn}
         type="submit"
         disabled={loading}
-        className="w-full h-12 bg-[#DFFF00] hover:bg-[#c9e800] text-black font-head text-base tracking-widest rounded-sm disabled:opacity-50"
+        className="w-full h-12 bg-[color:var(--forest)] hover:bg-[color:var(--forest-soft)] text-white font-head text-sm rounded-md disabled:opacity-50"
       >
-        <Lightning size={18} weight="fill" className="mr-2" />
-        {loading ? "PLOTTING…" : "GENERATE ROUTE"}
+        <Lightning size={16} weight="fill" className="mr-2" />
+        {loading ? "Plotting…" : "Generate route"}
       </Button>
     </form>
   );
@@ -175,12 +175,12 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
 function Row({ label, checked, onChange, tid }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-sm text-white/80">{label}</span>
+      <span className="text-[13px] text-[color:var(--ink-soft)]">{label}</span>
       <Switch
         data-testid={tid}
         checked={checked}
         onCheckedChange={onChange}
-        className="data-[state=checked]:bg-[#DFFF00]"
+        className="data-[state=checked]:bg-[color:var(--forest)]"
       />
     </div>
   );

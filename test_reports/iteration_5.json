@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 5 full-stack test. Backend: new /api/digest/preview (bengaluru+delhi+404+defaults+ranking), /api/digest/subscribe (create/upsert/422 + Mongo persistence verified, no email provider wired = correctly mocked), /api/routes/friend_overlap 401 gating, plus regressions for /api/routes/generate (~20s, full payload shape), /api/discovery, /api/strava/status, /api/routes/gpx, /api/routes/save+saved. 17 passed, 1 xfail (no email format validation). Frontend: Nordic Calm palette verified via computed styles (--bg #f2ede1, body rgb(242,237,225), Generate btn rgb(47,93,63) forest, Bricolage Grotesque display/head fonts), Signals tab disabled pre-generate and auto-activated post-generate with Failure Log rendered, sticky Save/GPX/Open-in-Strava footer all visible+working (Saved. toast, GPX file downloaded), Weekly Digest dialog opens with forest-green header, 'Your week in bengaluru', numbered picks with blurbs, subscribe success toast + invalid-email guard, map overlays positioned correctly with white/95 backgrounds, route line forest #2F5D3F on mapbox light-v11, Delhi city switch clears route and re-disables Signals.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/digest/subscribe", "issue": "email is plain str, not pydantic EmailStr. 'not-an-email' is accepted (200) and stored as the Mongo _id. Frontend regex is the only guard; API callers can pollute digest_subscribers."},
+      {"endpoint": "GET /api/digest/preview", "issue": "Returns 4 picks for bengaluru/delhi (mock_strava only has 4 curated routes per city) while spec/UI copy implies 5. Not a defect per the 4-5 acceptance range, but picks[:5] can never reach 5 until mock data grows."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "StravaConnect / Home sticky footer", "issue": "Tailwind opacity modifier on an arbitrary CSS-var color is invalid: className border-[color:var(--strava)]/40 is dropped, so computed borderColor is the default rgb(229,231,235) gray, not the terracotta Strava tint. Same pattern on push-to-strava-btn. Use color-mix(in srgb, var(--strava) 40%, transparent) or a dedicated --strava-40 token.", "selector": "[data-testid=\"strava-connect-btn\"], [data-testid=\"push-to-strava-btn\"]", "priority": "LOW"},
+      {"component": "WeeklyDigest DialogContent", "issue": "React a11y console warning: 'Missing Description or aria-describedby for DialogContent'. Add DialogDescription (or aria-describedby) to the digest dialog.", "selector": "[data-testid=\"weekly-digest-dialog\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Map empty state", "issues": ["Mapbox city label ('Bengaluru'/'New Delhi') renders directly behind/above the giant 'Ready to run.' headline, creating visual collision at 1920x1080."]},
+      {"screen": "Map with route", "issues": ["The 'Route ready · X km' sonner toast lands top-center and overlaps the weather-strip chips (weather-strip top=24, toast same band) — the temperature/AQI chips are obscured for the toast duration."]},
+      {"screen": "Builder form", "issues": ["Start time uses the native browser <input type=\"time\"> picker (OS clock widget) rather than a styled control, which breaks from the otherwise custom Nordic Calm styling."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5_digest.py",
+    "/app/test_reports/pytest/iteration5_results.xml"
+  ],
+  "action_items": [
+    "Replace border-[color:var(--strava)]/40 with color-mix() (or a --strava-40 var) on strava-connect-btn and push-to-strava-btn so the muted Strava border actually renders.",
+    "Add EmailStr validation to DigestSubscribeRequest.email (returns 422 for malformed emails) — currently malformed emails become Mongo _id keys.",
+    "Add DialogDescription/aria-describedby to WeeklyDigest dialog to clear the Radix a11y warning.",
+    "Offset the generate-success toast (or move weather-strip) so weather chips are not covered.",
+    "Optional: seed a 5th curated route per city so digest picks reach 5 as the copy implies."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~617 lines and mixes Strava OAuth, routing, digest and GPX concerns — consider splitting into routers (strava.py, routes.py, digest.py) before it crosses 700 lines.",
+    "digest_preview stores the email as Mongo _id (req.email.lower()); the raw-case email is also stored in the doc, so lookups by 'email' vs '_id' can diverge. Normalise to one field.",
+    "digest_preview mutates dicts returned by list_discovery via dict(r, digest_score=...) — safe, but the blurb loop writes onto the same objects sliced into picks; keep it copy-based if list_discovery ever returns cached module-level objects (mock_strava currently returns fresh lists — verify).",
+    "friend_overlap reuses RankRequest (coordinates + activity_type) but ignores activity_type; define a dedicated request model to avoid a misleading contract.",
+    "No test-only cleanup hook for digest_subscribers; TEST_ rows persist in Mongo (I left TEST_digest_qa@example.test and qa_iteration5@example.test)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration5_digest.py"],
+  "success_rate": {"backend": "100% (17/17 passed, 1 xfail documented)", "frontend": "100% of specified flows pass; 2 low-severity style/a11y defects + 3 design nits"},
+  "seed_data_creation": "digest_subscribers rows: TEST_digest_qa@example.test, not-an-email (from negative test), qa_iteration5@example.test (UI). One saved_routes row named TEST_saved_route plus one saved via UI.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "None required; /app/memory/test_credentials.md not needed (no auth in app). Strava OAuth not exercisable unattended — only 401 gating + disconnected UI verified as instructed.",
+  "context_for_next_testing_agent": "Backend suite for iteration 5 lives at /app/backend/tests/test_iteration5_digest.py (runs in ~23s, pytest-xdist 2 workers via /app/backend/pytest.ini). Route generation is fast now (~20s) but keep >=90s timeouts. Strava-gated UI (StravaSafety, FriendOverlap) is only rendered when strava.connected is true, so the Signals tab in an unattended session shows only FailureLog + the dashed 'Connect Strava above' notice — that is expected, not a bug. FailureLog data-testid is 'failure-log-panel' (not 'failure-log').",
+  "rca_of_the_issue": "Strava border regression RCA: Tailwind's slash opacity modifier only works on colors it can parse into a channel-splittable value. With an arbitrary value of the form border-[color:var(--strava)]/40 the utility is emitted invalid/dropped at build time, so the element falls back to the default border color (gray-200, rgb(229,231,235)). Reproduce: load home, read getComputedStyle(document.querySelector('[data-testid=\"strava-connect-btn\"]')).borderColor. Mitigation: border-[color:color-mix(in_srgb,var(--strava)_40%,transparent)] or add --strava-40 to index.css."
+}

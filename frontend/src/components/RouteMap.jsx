@@ -10,56 +10,50 @@ const CITY_CENTERS = {
   delhi: [77.209, 28.6139],
 };
 
+const ROUTE_COLOR = "#2F5D3F";
+const WATER_COLOR = "#4A8FA4";
+
 export default function RouteMap({ city, route, onMapClick }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [ready, setReady] = useState(false);
 
-  // Init map once
   useEffect(() => {
     if (mapRef.current) return;
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
+      style: "mapbox://styles/mapbox/light-v11",
       center: CITY_CENTERS[city] || CITY_CENTERS.bengaluru,
       zoom: 12.5,
-      pitch: 25,
+      pitch: 20,
       attributionControl: false,
     });
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "bottom-right");
-    map.on("load", () => {
-      setReady(true);
-    });
+    map.on("load", () => setReady(true));
     map.on("click", (e) => {
       if (onMapClick) onMapClick([e.lngLat.lng, e.lngLat.lat]);
     });
     mapRef.current = map;
   }, []); // eslint-disable-line
 
-  // Fly to city on change
   useEffect(() => {
     if (!mapRef.current || !ready) return;
     const c = CITY_CENTERS[city];
     if (c) mapRef.current.flyTo({ center: c, zoom: 12.5, duration: 1400, essential: true });
   }, [city, ready]);
 
-  // Draw route
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
 
-    // Clear route layers/source (layer ids must match those created below)
     try {
       ["route-line-top", "route-glow"].forEach((id) => {
         if (map.getLayer(id)) map.removeLayer(id);
       });
       if (map.getSource("route-line")) map.removeSource("route-line");
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn("route cleanup:", e);
     }
-
-    // Clear markers
     (map._runMarkers || []).forEach((m) => m.remove());
     map._runMarkers = [];
 
@@ -69,7 +63,6 @@ export default function RouteMap({ city, route, onMapClick }) {
       type: "Feature",
       geometry: { type: "LineString", coordinates: route.coordinates },
     };
-
     map.addSource("route-line", { type: "geojson", data: geojson });
     map.addLayer({
       id: "route-glow",
@@ -77,10 +70,10 @@ export default function RouteMap({ city, route, onMapClick }) {
       source: "route-line",
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": "#DFFF00",
+        "line-color": ROUTE_COLOR,
         "line-width": 12,
-        "line-opacity": 0.18,
-        "line-blur": 6,
+        "line-opacity": 0.14,
+        "line-blur": 5,
       },
     });
     map.addLayer({
@@ -88,38 +81,34 @@ export default function RouteMap({ city, route, onMapClick }) {
       type: "line",
       source: "route-line",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#DFFF00", "line-width": 4 },
+      paint: { "line-color": ROUTE_COLOR, "line-width": 3.5 },
     });
 
     // Start marker
     const startEl = document.createElement("div");
     startEl.innerHTML = `
       <div style="position:relative;width:22px;height:22px;">
-        <div class="marker-pulse" style="background:#DFFF00;"></div>
-        <div style="position:absolute;inset:5px;background:#DFFF00;border-radius:999px;border:2px solid #000;"></div>
+        <div class="marker-pulse" style="background:${ROUTE_COLOR};"></div>
+        <div style="position:absolute;inset:5px;background:#fff;border-radius:999px;border:2px solid ${ROUTE_COLOR};"></div>
       </div>`;
-    const startMarker = new mapboxgl.Marker(startEl).setLngLat(route.start).addTo(map);
-    map._runMarkers.push(startMarker);
+    map._runMarkers.push(new mapboxgl.Marker(startEl).setLngLat(route.start).addTo(map));
 
-    // Water stop marker at midpoint
     if (route.midpoint) {
       const waterEl = document.createElement("div");
       waterEl.innerHTML = `
-        <div style="width:24px;height:24px;background:#00E5FF;border-radius:999px;
-          border:2px solid #000;display:flex;align-items:center;justify-content:center;
-          color:#000;font-weight:900;font-family:'Barlow Condensed';font-size:12px;">H₂O</div>`;
-      const wm = new mapboxgl.Marker(waterEl).setLngLat(route.midpoint).addTo(map);
-      map._runMarkers.push(wm);
+        <div style="width:22px;height:22px;background:#fff;border-radius:999px;
+          border:2px solid ${WATER_COLOR};display:flex;align-items:center;justify-content:center;
+          color:${WATER_COLOR};font-weight:800;font-family:'Bricolage Grotesque';font-size:9px;letter-spacing:-0.03em;">H₂O</div>`;
+      map._runMarkers.push(new mapboxgl.Marker(waterEl).setLngLat(route.midpoint).addTo(map));
     }
 
-    // Fit bounds
     const bounds = new mapboxgl.LngLatBounds();
     route.coordinates.forEach((c) => bounds.extend(c));
-    map.fitBounds(bounds, { padding: { top: 100, bottom: 220, left: 60, right: 60 }, duration: 1200 });
+    map.fitBounds(bounds, { padding: { top: 90, bottom: 200, left: 80, right: 60 }, duration: 1200 });
   }, [route, ready]);
 
   return (
-    <div className="relative w-full h-full grain" data-testid={PANELS.map}>
+    <div className="relative w-full h-full" data-testid={PANELS.map}>
       <div ref={containerRef} className="absolute inset-0" />
     </div>
   );

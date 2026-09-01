@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 
 ROOT_DIR = Path(__file__).parent
@@ -494,6 +494,88 @@ async def rank_route_by_strava(req: RankRequest, request: Request):
         token=token, route_coords=req.coordinates, activity_type=req.activity_type
     )
     return result
+
+
+@api_router.post("/routes/friend_overlap")
+async def friend_overlap(req: RankRequest, request: Request):
+    """Return recent runs by the connected athlete that overlap this route.
+
+    Strava's API doesn't expose *other* athletes' activities to third-party
+    apps, so 'friend overlap' honestly means the runner's own history. The
+    aggregate community count comes from the rank_by_strava segment stats.
+    """
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(401, "Connect Strava first")
+    token = await strava.valid_access_token(db, sid)
+    if not token:
+        raise HTTPException(401, "Strava token unavailable, please reconnect")
+    return await strava.find_own_history_overlap(token=token, route_coords=req.coordinates)
+
+
+class DigestSubscribeRequest(BaseModel):
+    email: EmailStr
+    city: str = "bengaluru"
+    distance_km: float = 5.0
+
+
+@api_router.post("/digest/subscribe")
+async def digest_subscribe(req: DigestSubscribeRequest):
+    """Save a runner's Sunday-digest preference. Live email sending is
+    disabled in this MVP; users preview digests in-app.
+    """
+    doc = {
+        "_id": req.email.lower(),
+        "email": req.email,
+        "city": req.city.lower(),
+        "distance_km": req.distance_km,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.digest_subscribers.update_one({"_id": doc["_id"]}, {"$set": doc}, upsert=True)
+    return {"subscribed": True, "email": req.email}
+
+
+@api_router.get("/digest/preview")
+async def digest_preview(city: str = "bengaluru", distance_km: float = 5.0):
+    """Return a Sunday-digest payload: 5 curated routes for the runner's city,
+    ranked heuristically by distance-fit + community popularity.
+    """
+    routes = list_discovery(city)
+    if not routes:
+        raise HTTPException(404, f"No routes for city '{city}'")
+    # Rank by fit (proximity to requested distance) + a community proxy
+    def score(r):
+        fit = 1 / (1 + abs(r["distance_km"] - distance_km))
+        pop = (r.get("athletes_this_week", 0) or 0) / 3000.0
+        return round(0.6 * fit + 0.4 * pop, 3)
+    ranked = sorted([dict(r, digest_score=score(r)) for r in routes],
+                    key=lambda r: r["digest_score"], reverse=True)
+    # Add human blurbs
+    for i, r in enumerate(ranked[:5]):
+        r["blurb"] = _digest_blurb(i, r, distance_km)
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    week_of = (now + timedelta(days=(6 - now.weekday()) % 7)).strftime("%b %d")
+    return {
+        "city": city,
+        "week_of": week_of,
+        "target_distance_km": distance_km,
+        "picks": ranked[:5],
+        "delivered": "in-app preview",
+    }
+
+
+def _digest_blurb(rank: int, r: Dict, target: float) -> str:
+    diff = r["distance_km"] - target
+    if rank == 0:
+        return f"Top pick this week — hits your {target}km target with {r['athletes_this_week']} runners this week."
+    if abs(diff) < 0.5:
+        return f"A very close match to your {target}km — {r['vibe'].lower()}"
+    if diff < -1:
+        return f"Shorter recovery option ({r['distance_km']}km) — {r['vibe'].lower()}"
+    if diff > 1:
+        return f"Stretch goal ({r['distance_km']}km) — {r['vibe'].lower()}"
+    return r["vibe"]
 
 
 class GpxRequest(BaseModel):

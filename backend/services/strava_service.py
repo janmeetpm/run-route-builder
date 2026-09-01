@@ -183,6 +183,49 @@ def score_segment_overlap(
     return inside / len(seg_s)
 
 
+async def find_own_history_overlap(
+    token: str,
+    route_coords: List[List[float]],
+    per_page: int = 30,
+    overlap_threshold: float = 0.25,
+    max_dist_m: float = 60.0,
+) -> Dict:
+    """Look at the connected athlete's own recent activities; return the ones
+    whose map summary_polyline overlaps the current route. Real "you were
+    here before" signal.
+    """
+    status, data = await strava_get(
+        token, "/athlete/activities", {"per_page": per_page, "page": 1}
+    )
+    if status >= 400:
+        return {"error": data, "matches": []}
+    matches = []
+    for a in data or []:
+        stype = (a.get("sport_type") or a.get("type") or "").lower()
+        if "run" not in stype:
+            continue
+        poly = ((a.get("map") or {}).get("summary_polyline") or "").strip()
+        if not poly:
+            continue
+        try:
+            decoded = polyline.decode(poly)
+        except Exception:
+            continue
+        overlap = score_segment_overlap(route_coords, decoded, max_dist_m=max_dist_m)
+        if overlap >= overlap_threshold:
+            matches.append({
+                "id": a.get("id"),
+                "name": a.get("name"),
+                "start_date_local": a.get("start_date_local"),
+                "distance_m": a.get("distance"),
+                "moving_time_s": a.get("moving_time"),
+                "avg_speed": a.get("average_speed"),
+                "overlap": round(overlap, 3),
+            })
+    matches.sort(key=lambda x: x["overlap"], reverse=True)
+    return {"matches": matches[:6], "checked": len(data or [])}
+
+
 async def rank_segments_along_route(
     token: str,
     route_coords: List[List[float]],

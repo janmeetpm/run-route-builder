@@ -8,14 +8,14 @@ function App() {
   return (
     <BrowserRouter>
       <Toaster
-        position="top-center"
-        theme="dark"
+        position="bottom-center"
+        theme="light"
         toastOptions={{
           style: {
-            background: "#121212",
-            border: "1px solid rgba(255,255,255,0.12)",
-            color: "#fff",
-            fontFamily: "'DM Sans', sans-serif",
+            background: "#ffffff",
+            border: "1px solid rgba(26,34,28,0.16)",
+            color: "#1a221c",
+            fontFamily: "'Manrope', sans-serif",
           },
         }}
       />

@@ -52,8 +52,14 @@ Create a running route agent that takes start point, distance, pace groups, and 
 - Sidebar StravaConnect (orange), StravaSafety panel with clickable segment links
 
 ## Backlog
-- P1: Real Strava OAuth + MCP route discovery
-- P1: GPX export
-- P2: Multi-loop / out-and-back variants
-- P2: Save to public shareable URL
-- P2: ORS retry on distance overshoot >20%
+- P1: Native Strava upload (needs `activity:write` scope)
+- P1: 5th curated route per city so digest picks hit 5
+- P2: Live email via Resend (needs user's key)
+- P2: Segment overlay on map with hover popups
+- P2: Custom time picker matching Nordic Calm
+
+## Implemented (2026-02-19)
+- **Nordic Calm redesign**: bone paper background, forest-green accent, Bricolage Grotesque + Manrope + JetBrains Mono; Mapbox `light-v11`; 3-tab sidebar (Builder / Discover / Signals) so first-load isn't congested.
+- **Sunday Digest** (email delivery MOCKED per user choice): `/api/digest/preview` + `/api/digest/subscribe`; WeeklyDigest modal with numbered picks and subscribe form.
+- **Friend Overlap**: `/api/routes/friend_overlap` matches the connected athlete's own recent runs against the current loop; "You've been here before" panel with links to Strava activities.
+- Polish: `--strava-40` CSS var for actual opacity, DialogDescription a11y, toast bottom-center, EmailStr validation.

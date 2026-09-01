@@ -14,7 +14,7 @@ export default function StravaConnect({ onConnected }) {
     try {
       const { data } = await axios.get(`${API}/strava/status`, { withCredentials: true });
       setStatus(data);
-      if (data.connected && onConnected) onConnected(data);
+      if (onConnected) onConnected(data);
     } catch {
       setStatus({ connected: false });
     }
@@ -22,7 +22,6 @@ export default function StravaConnect({ onConnected }) {
 
   useEffect(() => {
     refresh();
-    // Post-callback URL param
     const params = new URLSearchParams(window.location.search);
     if (params.get("strava") === "connected") {
       toast.success("Strava connected. Pulling your runs…");
@@ -52,26 +51,26 @@ export default function StravaConnect({ onConnected }) {
     return (
       <div
         data-testid="strava-connected"
-        className="flex items-center gap-2 border border-white/10 bg-white/5 rounded-sm px-3 py-2"
+        className="flex items-center gap-3 border border-[color:var(--line)] bg-white rounded-md px-3 py-2"
       >
         {a.profile ? (
-          <img src={a.profile} alt="" className="w-7 h-7 rounded-full border border-white/20" />
+          <img src={a.profile} alt="" className="w-7 h-7 rounded-full border border-[color:var(--line-strong)]" />
         ) : (
-          <PersonSimpleRun size={20} className="text-[#FC5200]" weight="fill" />
+          <PersonSimpleRun size={18} className="text-[color:var(--strava)]" weight="fill" />
         )}
         <div className="flex-1 min-w-0">
-          <div className="font-mono text-[9px] tracking-widest text-white/40">STRAVA</div>
-          <div className="text-xs text-white truncate">
+          <div className="mut-caps text-[8px]">Strava</div>
+          <div className="text-[12px] text-[color:var(--ink)] truncate">
             {a.firstname} {a.lastname}
           </div>
         </div>
         <button
           data-testid="strava-disconnect"
           onClick={disconnect}
-          className="text-white/40 hover:text-[#FF3B30] transition-colors"
+          className="text-[color:var(--ink-mute)] hover:text-[color:var(--terracotta)] transition-colors"
           title="Disconnect"
         >
-          <LinkBreak size={14} />
+          <LinkBreak size={13} />
         </button>
       </div>
     );
@@ -82,10 +81,11 @@ export default function StravaConnect({ onConnected }) {
       data-testid="strava-connect-btn"
       onClick={connect}
       disabled={loading}
-      className="w-full h-10 rounded-sm bg-[#FC5200] hover:bg-[#e04a00] text-white font-head text-xs tracking-widest"
+      variant="outline"
+      className="w-full h-10 rounded-md border-[color:var(--strava-40)] bg-transparent hover:bg-[color:var(--strava-08)] text-[color:var(--strava)] font-head text-xs"
     >
       <PersonSimpleRun size={14} weight="fill" className="mr-2" />
-      {loading ? "REDIRECTING…" : "CONNECT STRAVA"}
+      {loading ? "Redirecting…" : "Connect Strava"}
     </Button>
   );
 }
