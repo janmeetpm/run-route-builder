@@ -12,7 +12,7 @@ const CITIES = [
   { key: "delhi", label: "Delhi", start_lon: 77.209, start_lat: 28.6139, start_name: "Connaught Place, Delhi" },
 ];
 
-export default function BuilderForm({ city, setCity, onGenerate, loading, customStart }) {
+export default function BuilderForm({ city, setCity, onGenerate, loading, customStart, stravaConnected }) {
   const [distance, setDistance] = useState(5);
   const [pace, setPace] = useState("easy");
   const [provider, setProvider] = useState("claude");
@@ -21,6 +21,7 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
   const [avoidHwy, setAvoidHwy] = useState(true);
   const [wellLit, setWellLit] = useState(true);
   const [startTime, setStartTime] = useState("05:30");
+  const [useStravaPaths, setUseStravaPaths] = useState(false);
 
   const cityObj = CITIES.find((c) => c.key === city) || CITIES[0];
 
@@ -34,7 +35,7 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
       pace_group: pace,
       provider,
       constraints: { loop, water_stop: waterStop, avoid_highways: avoidHwy, well_lit: wellLit, start_time: startTime },
-    });
+    }, { useStravaPaths: useStravaPaths && stravaConnected });
   };
 
   return (
@@ -158,6 +159,24 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
           <Sun size={16} className="text-[color:var(--sun)]" />
         </div>
       </div>
+
+      {/* Strava-driven routing */}
+      {stravaConnected && (
+        <div className="border border-[color:var(--strava-40)] rounded-md p-3 bg-[color:var(--strava-08)]">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="font-head text-[13px] text-[color:var(--ink)]">Route through popular Strava paths</div>
+              <div className="text-[11px] text-[color:var(--ink-mute)] mt-0.5">Threads your loop through the most-run segments nearby.</div>
+            </div>
+            <Switch
+              data-testid="use-strava-paths"
+              checked={useStravaPaths}
+              onCheckedChange={setUseStravaPaths}
+              className="data-[state=checked]:bg-[color:var(--strava)]"
+            />
+          </div>
+        </div>
+      )}
 
       <Button
         data-testid={BUILDER.generateBtn}

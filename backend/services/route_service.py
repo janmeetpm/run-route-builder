@@ -1,78 +1,47 @@
 """OpenRouteService integration — real routing geometry for loop routes.
 
 Rationale: LLMs are bad at geometry. This module handles the actual route
-construction so we can compare LLM guesses against ground truth.
+construction so we can compare LLM guesses against ground truth. Includes
+an accuracy-retry loop when ORS overshoots the requested distance.
 """
 import os
+import math
 import random
 import httpx
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 
 ORS_BASE = "https://api.openrouteservice.org/v2/directions/foot-walking"
+ORS_GEOJSON = ORS_BASE + "/geojson"
+
+DEFAULT_TOLERANCE = 0.15   # 15% deviation from target ok
+MAX_ATTEMPTS = 4
 
 
-async def generate_loop_route(
-    lon: float,
-    lat: float,
-    distance_km: float,
-    avoid_highways: bool = True,
-    seed: Optional[int] = None,
-) -> Dict:
-    """Ask OpenRouteService for a real closed-loop walking/running route.
-
-    Returns GeoJSON-shaped dict with geometry, distance_m, duration_s, elevations.
-    """
+async def _post_ors(body: Dict) -> Dict:
     api_key = os.environ["ORS_API_KEY"]
-    if seed is None:
-        seed = random.randint(1, 99999)
-
-    body = {
-        "coordinates": [[lon, lat]],
-        "options": {
-            "round_trip": {
-                "length": int(distance_km * 1000),
-                "points": 5,
-                "seed": seed,
-            }
-        },
-        "elevation": True,
-        "instructions": True,
-        "geometry": True,
-    }
-    if avoid_highways:
-        # foot-walking profile doesn't support 'highways' avoid; skip silently.
-        # (We still surface the constraint to the LLM narration.)
-        pass
-
     headers = {
         "Authorization": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json, application/geo+json",
     }
-
-    url = ORS_BASE + "/geojson"
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, json=body, headers=headers)
+        r = await client.post(ORS_GEOJSON, json=body, headers=headers)
         if r.status_code != 200:
-            raise RuntimeError(f"ORS error {r.status_code}: {r.text[:300]}")
-        data = r.json()
+            raise RuntimeError(f"ORS error {r.status_code}: {r.text[:250]}")
+        return r.json()
 
+
+def _shape_route(data: Dict) -> Dict:
     feature = data["features"][0]
-    coords = feature["geometry"]["coordinates"]  # [[lon, lat, ele], ...]
+    coords = feature["geometry"]["coordinates"]
     summary = feature["properties"]["summary"]
     segments = feature["properties"].get("segments", [])
-
-    # Build elevation series
     elevations = [c[2] if len(c) > 2 else 0.0 for c in coords]
     coords_2d = [[c[0], c[1]] for c in coords]
-
-    # Cumulative distance along path (meters) for elevation chart
     dists = [0.0]
     for i in range(1, len(coords_2d)):
         dists.append(dists[-1] + _haversine_m(coords_2d[i - 1], coords_2d[i]))
-
-    # Turn instructions
     steps: List[Dict] = []
     for seg in segments:
         for step in seg.get("steps", []):
@@ -82,11 +51,7 @@ async def generate_loop_route(
                 "duration_s": step.get("duration"),
                 "type": step.get("type"),
             })
-
-    # Pick a midpoint for water stop
     mid_idx = len(coords_2d) // 2
-    midpoint = coords_2d[mid_idx]
-
     return {
         "coordinates": coords_2d,
         "elevations": elevations,
@@ -94,15 +59,106 @@ async def generate_loop_route(
         "distance_m": summary.get("distance", 0.0),
         "duration_s": summary.get("duration", 0.0),
         "steps": steps,
-        "midpoint": midpoint,  # [lon, lat]
+        "midpoint": coords_2d[mid_idx],
         "start": coords_2d[0],
         "end": coords_2d[-1],
-        "closed": _haversine_m(coords_2d[0], coords_2d[-1]) < 30.0,  # closure check
+        "closed": _haversine_m(coords_2d[0], coords_2d[-1]) < 30.0,
     }
 
 
+async def _one_loop(lon: float, lat: float, target_km: float, seed: int) -> Dict:
+    body = {
+        "coordinates": [[lon, lat]],
+        "options": {
+            "round_trip": {"length": int(target_km * 1000), "points": 5, "seed": seed}
+        },
+        "elevation": True,
+        "instructions": True,
+        "geometry": True,
+    }
+    return _shape_route(await _post_ors(body))
+
+
+async def generate_loop_route(
+    lon: float,
+    lat: float,
+    distance_km: float,
+    avoid_highways: bool = True,
+    seed: Optional[int] = None,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> Dict:
+    """Real closed-loop walking route with accuracy retry.
+
+    Strategy:
+    - Try up to MAX_ATTEMPTS attempts. Each attempt varies the seed and
+      corrects the requested `length` by the inverse of the previous
+      attempt's overshoot ratio.
+    - Return the best (lowest error) attempt; attach a `retry_stats` field
+      recording every attempt so the failure log can show how ORS was
+      pushed until it converged.
+    """
+    attempts: List[Dict] = []
+    best: Optional[Dict] = None
+    best_err = float("inf")
+    request_km = float(distance_km)
+
+    for i in range(MAX_ATTEMPTS):
+        seed_use = seed if (i == 0 and seed is not None) else random.randint(1, 99999)
+        try:
+            route = await _one_loop(lon, lat, request_km, seed_use)
+        except Exception as e:
+            attempts.append({
+                "attempt": i + 1, "seed": seed_use,
+                "requested_km": round(request_km, 2), "actual_km": None,
+                "err_pct": None, "error": str(e)[:120],
+            })
+            continue
+
+        actual_km = route["distance_m"] / 1000
+        err = abs(actual_km - distance_km) / max(distance_km, 0.01)
+        attempts.append({
+            "attempt": i + 1, "seed": seed_use,
+            "requested_km": round(request_km, 2),
+            "actual_km": round(actual_km, 2),
+            "err_pct": round(err * 100, 1),
+        })
+        if err < best_err:
+            best_err = err
+            best = route
+        if err <= tolerance:
+            break
+        # Correct next attempt: if we overshot, ask for proportionally less
+        ratio = distance_km / max(actual_km, 0.01)
+        request_km = max(1.0, min(30.0, request_km * ratio))
+
+    if best is None:
+        raise RuntimeError("All ORS attempts failed")
+    best["retry_stats"] = {
+        "attempts": attempts,
+        "final_err_pct": round(best_err * 100, 1),
+        "converged": best_err <= tolerance,
+        "tolerance_pct": int(tolerance * 100),
+    }
+    return best
+
+
+async def generate_waypoint_route(
+    coordinates: List[List[float]],
+) -> Dict:
+    """Real foot-walking route through explicit waypoints (used for Strava-
+    popularity routing). `coordinates` is [[lon,lat], ...] with the same
+    point at the start and end for a closed loop.
+    """
+    body = {
+        "coordinates": coordinates,
+        "elevation": True,
+        "instructions": True,
+        "geometry": True,
+    }
+    return _shape_route(await _post_ors(body))
+
+
 def _haversine_m(a: List[float], b: List[float]) -> float:
-    import math
     lon1, lat1 = a
     lon2, lat2 = b
     R = 6371000.0
@@ -116,7 +172,6 @@ def _haversine_m(a: List[float], b: List[float]) -> float:
 
 
 def compute_elevation_stats(elevations: List[float]) -> Dict:
-    """Compute total ascent, descent, min/max."""
     if not elevations:
         return {"ascent_m": 0, "descent_m": 0, "min_m": 0, "max_m": 0}
     ascent = 0.0

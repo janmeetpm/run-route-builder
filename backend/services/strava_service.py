@@ -183,6 +183,88 @@ def score_segment_overlap(
     return inside / len(seg_s)
 
 
+async def pick_popular_segments_near(
+    token: str,
+    lon: float,
+    lat: float,
+    distance_km: float,
+    activity_type: str = "running",
+) -> Dict:
+    """Return the top-athlete_count segments near a point, plus an ordered
+    waypoint list you can hand to ORS to build a real loop through them.
+
+    Strategy: query /segments/explore in a bbox scaled by the target loop
+    distance, keep only segments whose midpoint is within the search
+    radius, greedily pick the highest-athlete_count segments until their
+    combined length is ~40-60% of the target (the connectors from ORS make
+    up the rest), then order the picks nearest-neighbour from the start.
+    """
+    # bbox scaled by expected loop radius (~ distance_km / (2*pi) km)
+    radius_km = max(0.6, min(3.0, distance_km / (2 * math.pi) + 0.4))
+    d_lat = radius_km / 110.574
+    d_lon = radius_km / (111.320 * max(0.2, math.cos(math.radians(lat))))
+    bounds = f"{lat - d_lat},{lon - d_lon},{lat + d_lat},{lon + d_lon}"
+
+    status, data = await strava_get(
+        token, "/segments/explore",
+        {"bounds": bounds, "activity_type": activity_type},
+    )
+    if status >= 400:
+        return {"error": data, "segments": [], "waypoints": []}
+    segs = data.get("segments", []) or []
+    if not segs:
+        return {"segments": [], "waypoints": [], "note": "no segments in area"}
+
+    # Sort by popularity
+    segs.sort(key=lambda s: (s.get("athlete_count", 0), s.get("effort_count", 0)), reverse=True)
+
+    target_m = int(distance_km * 1000 * 0.55)  # 55% of loop budget from segments
+    picked: List[Dict] = []
+    running_m = 0
+    for s in segs:
+        d = s.get("distance") or 0
+        if d < 100 or d > target_m:  # skip tiny/huge segments
+            continue
+        picked.append(s)
+        running_m += d
+        if running_m >= target_m or len(picked) >= 4:
+            break
+
+    if not picked:
+        return {"segments": [], "waypoints": [], "note": "no suitable segments"}
+
+    # Order nearest-neighbour from the start point
+    start = [lon, lat]
+    remaining = list(picked)
+    ordered: List[Dict] = []
+    current = start
+    while remaining:
+        remaining.sort(key=lambda s: _haversine_m(current, [s["start_latlng"][1], s["start_latlng"][0]]))
+        nxt = remaining.pop(0)
+        ordered.append(nxt)
+        current = [nxt["end_latlng"][1], nxt["end_latlng"][0]]
+
+    # Build waypoints: start -> [segA_start, segA_end, segB_start, segB_end, ...] -> start
+    waypoints: List[List[float]] = [start]
+    picks_summary: List[Dict] = []
+    for s in ordered:
+        sl = [s["start_latlng"][1], s["start_latlng"][0]]
+        el = [s["end_latlng"][1], s["end_latlng"][0]]
+        waypoints.append(sl)
+        waypoints.append(el)
+        picks_summary.append({
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "distance_m": s.get("distance"),
+            "athlete_count": s.get("athlete_count", 0),
+            "effort_count": s.get("effort_count", 0),
+            "start_latlng": s.get("start_latlng"),
+            "end_latlng": s.get("end_latlng"),
+        })
+    waypoints.append(start)
+    return {"segments": picks_summary, "waypoints": waypoints}
+
+
 async def find_own_history_overlap(
     token: str,
     route_coords: List[List[float]],

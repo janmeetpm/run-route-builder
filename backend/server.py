@@ -17,7 +17,10 @@ from typing import List, Optional, Dict, Any
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from services.route_service import generate_loop_route, compute_elevation_stats, _haversine_m
+from services.route_service import (
+    generate_loop_route, generate_waypoint_route,
+    compute_elevation_stats, _haversine_m,
+)
 from services.llm_service import llm_guess_route, llm_narrate_route
 from services.weather_service import fetch_weather_snapshot
 from services.mock_strava import list_discovery
@@ -158,6 +161,30 @@ async def generate(req: GenerateRouteRequest):
 
     elev_stats = compute_elevation_stats(route["elevations"])
     actual_km = round(route["distance_m"] / 1000, 2)
+
+    # Log retry stats — every attempt ORS made until it got close enough
+    rstats = route.get("retry_stats") or {}
+    if rstats.get("attempts"):
+        for a in rstats["attempts"]:
+            lvl = "info" if a.get("err_pct") is None or a["err_pct"] <= rstats.get("tolerance_pct", 15) else "warn"
+            msg = (
+                f"attempt {a['attempt']}: requested {a['requested_km']}km "
+                f"→ got {a['actual_km']}km (err {a['err_pct']}%)"
+                if a.get("actual_km") is not None
+                else f"attempt {a['attempt']}: ORS error — {a.get('error')}"
+            )
+            failure_log.append({"t": now, "level": lvl, "stage": "ors_retry", "message": msg})
+        conv = rstats.get("converged")
+        failure_log.append({
+            "t": now,
+            "level": "success" if conv else "warn",
+            "stage": "ors_retry",
+            "message": (
+                f"Converged to {rstats['final_err_pct']}% error after {len(rstats['attempts'])} attempt(s)."
+                if conv else
+                f"Best-of-{len(rstats['attempts'])} still off by {rstats['final_err_pct']}% — showing closest fit."
+            ),
+        })
 
     # --- Step 3: Compare & log failures ---
     est_km = float(guess.get("estimated_distance_km", 0) or 0)
@@ -316,6 +343,7 @@ async def generate(req: GenerateRouteRequest):
         "provider": req.provider,
         "constraints": req.constraints.model_dump(),
         "weather": weather,
+        "retry_stats": rstats,
     }
     return result
 
@@ -511,6 +539,117 @@ async def friend_overlap(req: RankRequest, request: Request):
     if not token:
         raise HTTPException(401, "Strava token unavailable, please reconnect")
     return await strava.find_own_history_overlap(token=token, route_coords=req.coordinates)
+
+
+@api_router.post("/routes/generate_from_strava")
+async def generate_from_strava(req: GenerateRouteRequest, request: Request):
+    """Build a loop that threads through the most-run Strava segments near
+    the start point. Falls back with a 400 if Strava isn't connected.
+    """
+    sid = _get_sid(request)
+    if not sid:
+        raise HTTPException(401, "Connect Strava first to route through popular segments")
+    token = await strava.valid_access_token(db, sid)
+    if not token:
+        raise HTTPException(401, "Strava token unavailable, please reconnect")
+
+    failure_log: List[Dict[str, Any]] = []
+    now = datetime.now(timezone.utc).isoformat()
+
+    picks = await strava.pick_popular_segments_near(
+        token=token, lon=req.start_lon, lat=req.start_lat,
+        distance_km=req.distance_km,
+    )
+    if not picks.get("waypoints"):
+        failure_log.append({
+            "t": now, "level": "warn", "stage": "strava_segments",
+            "message": f"No popular Strava segments found nearby — falling back to synthetic loop.",
+        })
+        # Fall back to the standard generator
+        req.provider = req.provider or "claude"
+        return await generate(req)
+
+    failure_log.append({
+        "t": now, "level": "success", "stage": "strava_segments",
+        "message": (
+            f"Threaded loop through {len(picks['segments'])} popular segment(s): "
+            + ", ".join(f"{s['name']} ({s['athlete_count']} athletes)" for s in picks["segments"][:3])
+            + ("…" if len(picks["segments"]) > 3 else "")
+        ),
+    })
+
+    try:
+        route = await generate_waypoint_route(coordinates=picks["waypoints"])
+    except Exception as e:
+        failure_log.append({
+            "t": now, "level": "error", "stage": "ors_waypoints",
+            "message": f"ORS waypoint routing failed: {str(e)[:120]} — falling back to loop.",
+        })
+        return await generate(req)
+
+    elev_stats = compute_elevation_stats(route["elevations"])
+    actual_km = round(route["distance_m"] / 1000, 2)
+    err_pct = abs(actual_km - req.distance_km) / max(req.distance_km, 0.01) * 100
+    failure_log.append({
+        "t": now,
+        "level": "info" if err_pct <= 25 else "warn",
+        "stage": "strava_routing",
+        "message": f"Delivered {actual_km} km (asked {req.distance_km} km, err {err_pct:.0f}%). Popular segments determine the shape.",
+    })
+
+    # Weather
+    try:
+        weather = await fetch_weather_snapshot(
+            lat=req.start_lat, lon=req.start_lon,
+            start_time_hhmm=req.constraints.start_time,
+        )
+    except Exception:
+        weather = None
+
+    # Narration
+    try:
+        narration = await llm_narrate_route(
+            provider=req.provider, start_name=req.start_name,
+            distance_km=actual_km, elev_stats=elev_stats,
+            elevations=route["elevations"],
+            constraints=req.constraints.model_dump(),
+            steps_preview=route["steps"], weather=weather,
+        )
+        narration.pop("_parse_ok", None)
+        narration.pop("_parse_error", None)
+    except Exception:
+        narration = {
+            "headline": f"{actual_km}km Strava-Popular Loop",
+            "narration": "Threaded through the runners' favourite segments.",
+            "segments": [], "safety_note": "", "water_stop_pitch": "",
+        }
+
+    return {
+        "id": str(uuid.uuid4()),
+        "start_name": req.start_name,
+        "start": [req.start_lon, req.start_lat],
+        "distance_km": actual_km,
+        "duration_s": route["duration_s"],
+        "elev_stats": elev_stats,
+        "coordinates": route["coordinates"],
+        "elevations": route["elevations"],
+        "cumulative_distance_m": route["cumulative_distance_m"],
+        "steps": route["steps"],
+        "midpoint": route["midpoint"],
+        "closed": route["closed"],
+        "narration": narration,
+        "llm_guess": {
+            "estimated_distance_km": 0, "estimated_ascent_m": 0,
+            "reasoning": "Bypassed — routed through popular Strava segments instead of an LLM guess.",
+            "waypoint_count": 0, "distance_error_pct": 0,
+        },
+        "failure_log": failure_log,
+        "provider": req.provider,
+        "constraints": req.constraints.model_dump(),
+        "weather": weather,
+        "via_strava_segments": picks["segments"],
+        "source": "strava_popular",
+    }
 
 
 class DigestSubscribeRequest(BaseModel):
