@@ -54,7 +54,7 @@ export default function StravaSafety({ route, stravaConnected }) {
             <Warning size={12} className="mt-0.5" /> {error}
           </div>
         )}
-        {data && !loading && (
+        {data && !loading && !error && !data.error && typeof data.score === "number" && (
           <>
             <div className="flex items-baseline gap-3">
               <div className="font-display text-[42px] leading-none text-[color:var(--forest)]">{data.score}</div>
@@ -63,7 +63,7 @@ export default function StravaSafety({ route, stravaConnected }) {
                   {data.score_bucket}
                 </div>
                 <div className="font-mono text-[9px] text-[color:var(--ink-mute)]">
-                  {data.total_athletes.toLocaleString()} athletes · {data.overlapping_count} segments
+                  {(data.total_athletes || 0).toLocaleString()} athletes · {data.overlapping_count || 0} segments
                 </div>
               </div>
             </div>
@@ -82,18 +82,23 @@ export default function StravaSafety({ route, stravaConnected }) {
                       {s.name}
                     </a>
                     <span className="font-mono text-[10px] text-[color:var(--ink-mute)] flex items-center gap-0.5">
-                      <Users size={10} /> {s.athlete_count.toLocaleString()}
+                      <Users size={10} /> {(s.athlete_count || 0).toLocaleString()}
                     </span>
                   </li>
                 ))}
               </ul>
             )}
-            {data.overlapping_count === 0 && (
+            {(data.overlapping_count || 0) === 0 && (
               <div className="text-[11px] text-[color:var(--ink-mute)] italic">
                 No popular Strava segments overlap this loop — you're pioneering.
               </div>
             )}
           </>
+        )}
+        {data && !loading && !error && data.error && (
+          <div className="text-[11px] text-[color:var(--ink-mute)] italic">
+            Strava segment lookup unavailable{data.error === "rate_limited" ? " (rate-limited)" : ""} — try again shortly.
+          </div>
         )}
       </div>
     </div>

@@ -1,0 +1,25 @@
+{
+  "summary": "Frontend-only regression re-test of the StravaSafety 'toLocaleString' crash. Ran 3 Playwright sessions against the public preview URL with page.route interception of /api/strava/status and /api/routes/rank_by_strava. (1) Strava-connected + error-shape body {error:'rate_limited',segments:[],score:0}: route generated, narration-panel rendered, NO React error overlay / whitescreen, zero pageerrors, zero console errors, strava-safety renders the italic 'Strava segment lookup unavailable (rate-limited)' message. (2) Normal success payload (score 78, bucket well-run, total_athletes 1234567, 6 segments incl. one missing athlete_count and one null): renders 78, 'Well-Run', '1,234,567 athletes · 6 segments', top-5 segments only, missing/null athlete_count falls back to '0' — no crash. (3) Not Strava-connected with real backend: Home loads, real route generated on Bengaluru, strava-safety absent, 'Connect Strava above...' hint shown, failure-log-panel visible in Signals tab, sticky footer Save/GPX/Push-to-Strava all visible. No 'toLocaleString' error observed in any run. Bug is FIXED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "StravaSafety", "issue": "When the response is an error shape (error:'rate_limited', score:0), the success block ALSO renders because score is a number 0 — user sees a misleading big '0' score, '0 athletes · 0 segments' and the message \"No popular Strava segments overlap this loop — you're pioneering\" stacked above the 'unavailable' notice. Success block should be suppressed when data.error is present (e.g. `!data.error && typeof data.score === 'number'`).", "selector": "[data-testid=\"strava-safety\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": ["StravaSafety.jsx: gate the success block on `!data.error` so the misleading 0-score / 'you're pioneering' text does not render alongside the 'lookup unavailable' message."],
+  "critical_code_review_comments": [
+    "StravaSafety error-shape and success-shape render conditions are not mutually exclusive (score:0 is a valid number), causing double rendering.",
+    "The axios .catch only reads e.response?.data?.detail; a 200-with-error-body is handled in render instead of being normalised in the effect — consider mapping {error} to the local `error` state for a single render path."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested", "frontend": "100% of 5 requested regression cases passed (1 cosmetic issue)"},
+  "seed_data_creation": "None; routes generated transiently, not saved.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "None required (no auth in MVP per /app/memory/test_credentials.md); Strava OAuth was mocked via page.route.",
+  "context_for_next_testing_agent": "Strava-connected paths can be fully exercised by stubbing /api/strava/status -> {connected:true, athlete:{firstname:'Test'}} and /api/routes/rank_by_strava with page.route; also stub /api/routes/friend_overlap** to reduce noise. Route generation takes ~30-60s, use >=120s waits for [data-testid='narration-panel'], then click [data-testid='signals-tab'].",
+  "rca_of_the_issue": "Original crash: rank_by_strava returns HTTP 200 with an error-shape body on Strava 429; component read data.total_athletes.toLocaleString() on undefined. Fix (typeof score check + (x||0) coalescing) verified effective; residual issue is only the non-exclusive render conditions described above."
+}
