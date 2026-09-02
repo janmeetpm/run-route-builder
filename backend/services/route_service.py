@@ -5,6 +5,7 @@ construction so we can compare LLM guesses against ground truth. Includes
 an accuracy-retry loop when ORS overshoots the requested distance.
 """
 import os
+import re
 import math
 import random
 import httpx
@@ -13,6 +14,15 @@ from typing import List, Dict, Optional, Tuple
 
 ORS_BASE = "https://api.openrouteservice.org/v2/directions/foot-walking"
 ORS_GEOJSON = ORS_BASE + "/geojson"
+ORS_SNAP = "https://api.openrouteservice.org/v2/snap/foot-walking/json"
+
+# ORS reports an unroutable waypoint as e.g. "...of specified coordinate 3: 77.6 12.9"
+_UNROUTABLE_COORD_RE = re.compile(r"coordinate\s+(\d+)", re.IGNORECASE)
+
+# Public-API foot-walking snapping radius. Strava segment endpoints come from
+# GPS traces and routinely sit 10-40 m off the walkable network.
+SNAP_RADIUS_M = 350
+MAX_WAYPOINT_RETRIES = 5
 
 DEFAULT_TOLERANCE = 0.15   # 15% deviation from target ok
 MAX_ATTEMPTS = 4
@@ -142,20 +152,144 @@ async def generate_loop_route(
     return best
 
 
+async def _snap_to_network(
+    coordinates: List[List[float]], radius_m: int = SNAP_RADIUS_M
+) -> Optional[List[Optional[List[float]]]]:
+    """Best-effort snap of raw GPS points onto the foot-walking network.
+
+    Returns one entry per input coordinate — the snapped [lon, lat], or None
+    where ORS found nothing routable in range. Returns None entirely if the
+    snap endpoint is unavailable, so callers treat snapping as optional.
+    """
+    api_key = os.environ["ORS_API_KEY"]
+    headers = {
+        "Authorization": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    body = {"locations": coordinates, "radius": radius_m}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(ORS_SNAP, json=body, headers=headers)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception:
+        return None
+
+    locations = data.get("locations")
+    if not isinstance(locations, list) or len(locations) != len(coordinates):
+        return None
+
+    out: List[Optional[List[float]]] = []
+    for entry in locations:
+        if isinstance(entry, dict) and isinstance(entry.get("location"), list):
+            loc = entry["location"]
+            if len(loc) >= 2:
+                out.append([float(loc[0]), float(loc[1])])
+                continue
+        out.append(None)
+    return out
+
+
+def _dedupe_consecutive(
+    coordinates: List[List[float]], min_gap_m: float = 25.0
+) -> List[List[float]]:
+    """Drop waypoints that sit on top of their predecessor.
+
+    Adjacent Strava segments often share an endpoint; ORS rejects a leg whose
+    source and target are the same point. The final coordinate is always kept
+    so a closed loop stays closed.
+    """
+    if len(coordinates) <= 2:
+        return list(coordinates)
+    kept = [coordinates[0]]
+    for c in coordinates[1:-1]:
+        if _haversine_m(kept[-1], c) >= min_gap_m:
+            kept.append(c)
+    kept.append(coordinates[-1])
+    return kept
+
+
 async def generate_waypoint_route(
     coordinates: List[List[float]],
 ) -> Dict:
     """Real foot-walking route through explicit waypoints (used for Strava-
     popularity routing). `coordinates` is [[lon,lat], ...] with the same
     point at the start and end for a closed loop.
+
+    Strava segment endpoints are raw GPS and frequently aren't routable for
+    foot-walking. A single bad waypoint 400s the whole ORS request, so we
+    snap first, then drop individual offending waypoints and retry rather
+    than losing the route. The start/end anchor is never dropped.
     """
-    body = {
-        "coordinates": coordinates,
-        "elevation": True,
-        "instructions": True,
-        "geometry": True,
-    }
-    return _shape_route(await _post_ors(body))
+    requested = len(coordinates)
+    coords = _dedupe_consecutive(coordinates)
+
+    snapped = await _snap_to_network(coords)
+    if snapped:
+        rebuilt: List[List[float]] = []
+        for i, (original, snap) in enumerate(zip(coords, snapped)):
+            is_anchor = i == 0 or i == len(coords) - 1
+            if snap:
+                rebuilt.append(snap)
+            elif is_anchor:
+                # Keep the runner's own start point even if snapping failed.
+                rebuilt.append(original)
+            # else: unsnappable intermediate waypoint — leave it out.
+        # Re-close the loop if the anchors both snapped to slightly different points.
+        coords = _dedupe_consecutive(rebuilt)
+
+    dropped_unroutable: List[int] = []
+    last_error: Optional[Exception] = None
+
+    for _ in range(MAX_WAYPOINT_RETRIES):
+        if len(coords) < 2:
+            break
+        body = {
+            "coordinates": coords,
+            "elevation": True,
+            "instructions": True,
+            "geometry": True,
+        }
+        try:
+            shaped = _shape_route(await _post_ors(body))
+        except RuntimeError as e:
+            last_error = e
+            idx = _unroutable_index(str(e), len(coords))
+            if idx is None:
+                raise
+            dropped_unroutable.append(idx)
+            coords = coords[:idx] + coords[idx + 1:]
+            continue
+
+        shaped["waypoints_requested"] = requested
+        shaped["waypoints_used"] = len(coords)
+        shaped["waypoints_dropped"] = requested - len(coords)
+        return shaped
+
+    raise RuntimeError(
+        f"ORS could not route the Strava waypoints after dropping "
+        f"{len(dropped_unroutable)} unroutable point(s): {last_error}"
+    )
+
+
+def _unroutable_index(message: str, n_coords: int) -> Optional[int]:
+    """Pull the offending waypoint index out of an ORS error message.
+
+    Returns None when the error isn't an unroutable-point complaint, or when
+    the culprit is the start/end anchor — in both cases dropping a waypoint
+    won't help and the caller should fall back instead.
+    """
+    if "routable point" not in message.lower():
+        return None
+    m = _UNROUTABLE_COORD_RE.search(message)
+    if not m:
+        return None
+    idx = int(m.group(1))
+    if idx <= 0 or idx >= n_coords - 1:
+        return None
+    return idx
 
 
 def _haversine_m(a: List[float], b: List[float]) -> float:

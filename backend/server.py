@@ -544,7 +544,8 @@ async def friend_overlap(req: RankRequest, request: Request):
 @api_router.post("/routes/generate_from_strava")
 async def generate_from_strava(req: GenerateRouteRequest, request: Request):
     """Build a loop that threads through the most-run Strava segments near
-    the start point. Falls back with a 400 if Strava isn't connected.
+    the start point. Falls back to a regular generated loop when Strava
+    segments are unavailable or ORS cannot route the selected waypoints.
     """
     sid = _get_sid(request)
     if not sid:
@@ -556,18 +557,33 @@ async def generate_from_strava(req: GenerateRouteRequest, request: Request):
     failure_log: List[Dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat()
 
-    picks = await strava.pick_popular_segments_near(
-        token=token, lon=req.start_lon, lat=req.start_lat,
-        distance_km=req.distance_km,
-    )
-    if not picks.get("waypoints"):
+    async def fallback_with_log(source: str):
+        fallback = await generate(req)
+        fallback["failure_log"] = failure_log + fallback.get("failure_log", [])
+        fallback["source"] = "strava_fallback"
+        fallback["strava_fallback_reason"] = source
+        fallback["via_strava_segments"] = []
+        return fallback
+
+    try:
+        picks = await strava.pick_popular_segments_near(
+            token=token, lon=req.start_lon, lat=req.start_lat,
+            distance_km=req.distance_km,
+        )
+    except Exception as e:
         failure_log.append({
             "t": now, "level": "warn", "stage": "strava_segments",
-            "message": f"No popular Strava segments found nearby — falling back to synthetic loop.",
+            "message": f"Strava segment lookup failed: {str(e)[:120]} — falling back to synthetic loop.",
         })
-        # Fall back to the standard generator
-        req.provider = req.provider or "claude"
-        return await generate(req)
+        return await fallback_with_log("segment_lookup_failed")
+
+    if not picks.get("waypoints"):
+        detail = picks.get("note") or picks.get("error") or "no routable popular segments"
+        failure_log.append({
+            "t": now, "level": "warn", "stage": "strava_segments",
+            "message": f"No popular Strava segments found nearby ({str(detail)[:120]}) — falling back to synthetic loop.",
+        })
+        return await fallback_with_log("no_segments")
 
     failure_log.append({
         "t": now, "level": "success", "stage": "strava_segments",
@@ -583,9 +599,26 @@ async def generate_from_strava(req: GenerateRouteRequest, request: Request):
     except Exception as e:
         failure_log.append({
             "t": now, "level": "error", "stage": "ors_waypoints",
-            "message": f"ORS waypoint routing failed: {str(e)[:120]} — falling back to loop.",
+            "message": f"ORS waypoint routing failed: {str(e)[:200]} — falling back to loop.",
         })
-        return await generate(req)
+        return await fallback_with_log("waypoint_routing_failed")
+
+    if not route.get("coordinates"):
+        failure_log.append({
+            "t": now, "level": "error", "stage": "ors_waypoints",
+            "message": "ORS returned an empty geometry — falling back to loop.",
+        })
+        return await fallback_with_log("empty_geometry")
+
+    dropped = route.get("waypoints_dropped") or 0
+    if dropped:
+        failure_log.append({
+            "t": now, "level": "warn", "stage": "ors_waypoints",
+            "message": (
+                f"Dropped {dropped} unroutable Strava waypoint(s) — those segment "
+                f"endpoints aren't on the walkable network. Routed through the rest."
+            ),
+        })
 
     elev_stats = compute_elevation_stats(route["elevations"])
     actual_km = round(route["distance_m"] / 1000, 2)

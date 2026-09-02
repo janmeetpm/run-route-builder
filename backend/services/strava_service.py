@@ -7,6 +7,7 @@ Tokens auto-refresh 60s before expiry.
 """
 import os
 import time
+import asyncio
 import math
 import hashlib
 import secrets
@@ -159,6 +160,27 @@ def _sample(coords: List[List[float]], n: int) -> List[List[float]]:
     return coords[::stride]
 
 
+def _latlng_to_lonlat(value) -> Optional[List[float]]:
+    """Convert Strava [lat, lon] values to ORS [lon, lat] coordinates."""
+    if not isinstance(value, list) or len(value) < 2:
+        return None
+    try:
+        lat = float(value[0])
+        lon = float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return [lon, lat]
+
+
+def _num(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def score_segment_overlap(
     route_coords: List[List[float]],  # [[lon, lat], ...]
     seg_points_lat_lon: List[Tuple[float, float]],
@@ -181,6 +203,40 @@ def score_segment_overlap(
                 inside += 1
                 break
     return inside / len(seg_s)
+
+
+async def enrich_segment_stats(
+    token: str, segs: List[Dict], limit: int = 10
+) -> List[Dict]:
+    """Fill in popularity counts that /segments/explore doesn't return.
+
+    The explore endpoint's ExplorerSegment payload carries geometry and
+    distance but no athlete_count/effort_count, so ranking "most-run"
+    segments off an explore response sorts by zero. /segments/{id} has the
+    real counts. Best-effort and mutates in place: on any failure (rate
+    limit, deleted segment, private) the segment keeps a count of 0 rather
+    than failing the request.
+    """
+    targets = [
+        s for s in segs
+        if s.get("id") is not None and not s.get("athlete_count")
+    ][:limit]
+    if not targets:
+        return segs
+
+    async def one(s: Dict):
+        try:
+            status, data = await strava_get(token, f"/segments/{s['id']}")
+        except Exception:
+            return
+        if status >= 400 or not isinstance(data, dict):
+            return
+        s["athlete_count"] = int(_num(data.get("athlete_count")))
+        s["effort_count"] = int(_num(data.get("effort_count")))
+        s["star_count"] = int(_num(data.get("star_count")))
+
+    await asyncio.gather(*(one(s) for s in targets), return_exceptions=True)
+    return segs
 
 
 async def pick_popular_segments_near(
@@ -211,27 +267,47 @@ async def pick_popular_segments_near(
     )
     if status >= 400:
         return {"error": data, "segments": [], "waypoints": []}
-    segs = data.get("segments", []) or []
+    segs = data.get("segments", []) if isinstance(data, dict) else []
+    segs = segs or []
     if not segs:
         return {"segments": [], "waypoints": [], "note": "no segments in area"}
 
-    # Sort by popularity
-    segs.sort(key=lambda s: (s.get("athlete_count", 0), s.get("effort_count", 0)), reverse=True)
-
     target_m = int(distance_km * 1000 * 0.55)  # 55% of loop budget from segments
-    picked: List[Dict] = []
-    running_m = 0
+
+    # Keep only segments we can actually thread a route through, before
+    # spending API calls on popularity lookups.
+    candidates: List[Dict] = []
     for s in segs:
-        d = s.get("distance") or 0
+        if not _latlng_to_lonlat(s.get("start_latlng")):
+            continue
+        if not _latlng_to_lonlat(s.get("end_latlng")):
+            continue
+        d = _num(s.get("distance"))
         if d < 100 or d > target_m:  # skip tiny/huge segments
             continue
+        candidates.append(s)
+
+    if not candidates:
+        return {"segments": [], "waypoints": [], "note": "no suitable segments"}
+
+    # explore() gives no counts — fetch them so "most-run" means something.
+    await enrich_segment_stats(token, candidates)
+    candidates.sort(
+        key=lambda s: (
+            _num(s.get("athlete_count")),
+            _num(s.get("effort_count")),
+            _num(s.get("distance")),
+        ),
+        reverse=True,
+    )
+
+    picked: List[Dict] = []
+    running_m = 0.0
+    for s in candidates:
         picked.append(s)
-        running_m += d
+        running_m += _num(s.get("distance"))
         if running_m >= target_m or len(picked) >= 4:
             break
-
-    if not picked:
-        return {"segments": [], "waypoints": [], "note": "no suitable segments"}
 
     # Order nearest-neighbour from the start point
     start = [lon, lat]
@@ -239,17 +315,19 @@ async def pick_popular_segments_near(
     ordered: List[Dict] = []
     current = start
     while remaining:
-        remaining.sort(key=lambda s: _haversine_m(current, [s["start_latlng"][1], s["start_latlng"][0]]))
+        remaining.sort(key=lambda s: _haversine_m(current, _latlng_to_lonlat(s.get("start_latlng")) or start))
         nxt = remaining.pop(0)
         ordered.append(nxt)
-        current = [nxt["end_latlng"][1], nxt["end_latlng"][0]]
+        current = _latlng_to_lonlat(nxt.get("end_latlng")) or current
 
     # Build waypoints: start -> [segA_start, segA_end, segB_start, segB_end, ...] -> start
     waypoints: List[List[float]] = [start]
     picks_summary: List[Dict] = []
     for s in ordered:
-        sl = [s["start_latlng"][1], s["start_latlng"][0]]
-        el = [s["end_latlng"][1], s["end_latlng"][0]]
+        sl = _latlng_to_lonlat(s.get("start_latlng"))
+        el = _latlng_to_lonlat(s.get("end_latlng"))
+        if not sl or not el:
+            continue
         waypoints.append(sl)
         waypoints.append(el)
         picks_summary.append({
@@ -261,6 +339,8 @@ async def pick_popular_segments_near(
             "start_latlng": s.get("start_latlng"),
             "end_latlng": s.get("end_latlng"),
         })
+    if not picks_summary:
+        return {"segments": [], "waypoints": [], "note": "no segments with routable endpoints"}
     waypoints.append(start)
     return {"segments": picks_summary, "waypoints": waypoints}
 
