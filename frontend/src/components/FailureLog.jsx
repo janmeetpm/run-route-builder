@@ -26,7 +26,7 @@ export default function FailureLog({ entries, llmGuess }) {
         <Terminal size={13} className={hasFail ? "text-[color:var(--terracotta)]" : "text-[color:var(--forest)]"} />
         <span className="mut-caps text-[9px]">Failure log · LLM vs Map API</span>
       </div>
-      <div className="px-4 pb-4 font-mono text-[11px] leading-relaxed space-y-1.5 max-h-[180px] overflow-y-auto no-scrollbar">
+      <div className="px-4 pb-4 font-mono text-[11px] leading-relaxed space-y-1.5 max-h-[240px] overflow-y-auto no-scrollbar break-words">
         {llmGuess && (
           <div className="text-[color:var(--ink-mute)] border-l border-[color:var(--line-strong)] pl-3 pb-1 mb-1">
             <div className="italic text-[color:var(--ink-soft)]">"{llmGuess.reasoning}"</div>
@@ -49,7 +49,7 @@ export default function FailureLog({ entries, llmGuess }) {
           return (
             <div key={i} className={`flex items-start gap-2 ${LEVEL[e.level] || LEVEL.info}`}>
               <Icon size={11} className="mt-[3px] shrink-0" />
-              <div className="flex-1">
+              <div className="flex-1 break-words">
                 <span className="text-[color:var(--ink-mute)]">[{e.stage}]</span>{" "}
                 <span>{e.message}</span>
               </div>

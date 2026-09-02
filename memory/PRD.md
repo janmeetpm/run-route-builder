@@ -58,8 +58,7 @@ Create a running route agent that takes start point, distance, pace groups, and 
 - P2: Segment overlay on map with hover popups
 - P2: Custom time picker matching Nordic Calm
 
-## Implemented (2026-02-19)
-- **Nordic Calm redesign**: bone paper background, forest-green accent, Bricolage Grotesque + Manrope + JetBrains Mono; Mapbox `light-v11`; 3-tab sidebar (Builder / Discover / Signals) so first-load isn't congested.
-- **Sunday Digest** (email delivery MOCKED per user choice): `/api/digest/preview` + `/api/digest/subscribe`; WeeklyDigest modal with numbered picks and subscribe form.
-- **Friend Overlap**: `/api/routes/friend_overlap` matches the connected athlete's own recent runs against the current loop; "You've been here before" panel with links to Strava activities.
-- Polish: `--strava-40` CSS var for actual opacity, DialogDescription a11y, toast bottom-center, EmailStr validation.
+## Implemented (2026-02-19 later)
+- **Route accuracy retry**: `generate_loop_route` now tries up to 4 attempts, correcting the ORS `round_trip.length` by the inverse overshoot ratio each time. Every attempt lands in `failure_log` as `[ors_retry]`, plus a final `Converged to X%` or `Best-of-N` line. Response gains `retry_stats {attempts, final_err_pct, converged, tolerance_pct}`. Real convergence: 5-8km asks now hit ±15% within 1-3 attempts.
+- **Strava-popularity routing**: new POST `/api/routes/generate_from_strava` picks top-athlete_count segments near the start (bbox scaled by distance), orders them nearest-neighbour, and calls ORS foot-walking with those as waypoints. Response adds `via_strava_segments` + `source:"strava_popular"`. Falls back to `/routes/generate` if no popular segments are nearby. UI: 'Route through popular Strava paths' toggle (Strava-connected only) in Builder.
+- **8 narrator models**: claude sonnet 5, claude haiku 4.5, gemini 3.1 pro, gemini 3.5 flash, gemini 2.5 flash (labelled Lite), gpt 5.6 terra, gpt 5.6 luna, gpt 5 mini — each labeled rich / fast / fastest in the Select. gemini-lite mapping updated to `gemini-2.5-flash` (the -lite model wasn't available on the key).

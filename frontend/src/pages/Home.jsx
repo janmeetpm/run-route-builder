@@ -38,15 +38,26 @@ export default function Home() {
 
   const { data: discovery } = useSWR(`${API}/discovery?city=${city}`, fetcher);
 
-  const generate = async (payload) => {
+  const generate = async (payload, opts = {}) => {
     setLoading(true);
     setRoute(null);
-    toast.loading("LLM guessing route… then handing to the map API.", { id: "gen" });
+    toast.loading(
+      opts.useStravaPaths
+        ? "Fetching popular Strava segments…"
+        : "LLM guessing route… then handing to the map API.",
+      { id: "gen" }
+    );
     try {
-      const { data } = await axios.post(`${API}/routes/generate`, payload, { timeout: 90000 });
+      const url = opts.useStravaPaths
+        ? `${API}/routes/generate_from_strava`
+        : `${API}/routes/generate`;
+      const { data } = await axios.post(url, payload, {
+        timeout: 90000,
+        withCredentials: opts.useStravaPaths,
+      });
       setRoute(data);
       toast.success(`Route ready · ${data.distance_km} km`, { id: "gen" });
-      setTab("signals"); // reveal the signals panel after generation
+      setTab("signals");
     } catch (e) {
       toast.error(e.response?.data?.detail || "Route generation failed", { id: "gen" });
     } finally {
@@ -179,6 +190,7 @@ export default function Home() {
                 onGenerate={generate}
                 loading={loading}
                 customStart={customStart}
+                stravaConnected={strava.connected}
               />
             </TabsContent>
 

@@ -127,8 +127,14 @@ export default function BuilderForm({ city, setCity, onGenerate, loading, custom
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="bg-white border-[color:var(--line-strong)]">
-            <SelectItem value="claude">Claude Sonnet 5</SelectItem>
-            <SelectItem value="gemini">Gemini 3.1 Pro</SelectItem>
+            <SelectItem value="claude">Claude Sonnet 5 · rich</SelectItem>
+            <SelectItem value="claude-haiku">Claude Haiku 4.5 · fast</SelectItem>
+            <SelectItem value="gemini">Gemini 3.1 Pro · rich</SelectItem>
+            <SelectItem value="gemini-flash">Gemini 3.5 Flash · fast</SelectItem>
+            <SelectItem value="gemini-lite">Gemini 2.5 Lite · fastest</SelectItem>
+            <SelectItem value="gpt-terra">GPT 5.6 Terra · rich</SelectItem>
+            <SelectItem value="gpt-luna">GPT 5.6 Luna · fast</SelectItem>
+            <SelectItem value="gpt-mini">GPT 5 Mini · fastest</SelectItem>
           </SelectContent>
         </Select>
       </div>

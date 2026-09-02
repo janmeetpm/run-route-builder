@@ -15,7 +15,13 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 PROVIDERS = {
     "claude": ("anthropic", "claude-sonnet-5"),
+    "claude-haiku": ("anthropic", "claude-haiku-4-5-20251001"),
     "gemini": ("gemini", "gemini-3.1-pro-preview"),
+    "gemini-flash": ("gemini", "gemini-3.5-flash"),
+    "gemini-lite": ("gemini", "gemini-2.5-flash"),
+    "gpt-terra": ("openai", "gpt-5.6-terra"),
+    "gpt-luna": ("openai", "gpt-5.6-luna"),
+    "gpt-mini": ("openai", "gpt-5-mini"),
 }
 
 
